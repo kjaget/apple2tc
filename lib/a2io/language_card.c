@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
-// "Language Card" area Switches
+// Language Card area Switches
 // Bank 1 and Bank 2 here are the 4K banks at $D000-$DFFF. The
 // remaining area from $E000-$FFFF is the same for both
 // sets of switches.
@@ -46,6 +46,8 @@ void a2_language_card_init(a2_language_card_t *lc) {
   lc->visible_memory_dirty = true;
 }
 
+// Load a ROM into the language card. The ROM is placed at the highest addresses of the ROM area.
+// This isn't run in response to memory accesses; it is used to pre-load the ROM at startup
 void a2_language_card_load_rom(a2_language_card_t *lc, const uint8_t *rom, uint16_t rom_size) {
   if (rom_size > sizeof(lc->rom)) {
     fprintf(stderr, "a2_language_card_load_rom: ROM size %u exceeds maximum %zu\n", rom_size, sizeof(lc->rom));
@@ -57,6 +59,12 @@ void a2_language_card_load_rom(a2_language_card_t *lc, const uint8_t *rom, uint1
   lc->visible_memory_dirty = true;
 }
 
+// Read a byte from the language card area at the given offset. The offset is relative to the start of the
+// language card memory region $D000-$FFFF.  Reads can come from either the ROM or the RAM banks depending
+// on the current RAM/ROM read switch andbanked memory state.
+// Writes always go to RAM, even if the ROM is currently selected for reading.
+// RAM is divided into two banks (bank1 and bank2) and a high RAM area. The currently active bank is selected
+// by banked_memory_ram_select.
 uint8_t a2_language_card_peek(a2_language_card_t *lc, unsigned offset) {
   if (lc->banked_memory_read_rom) {
     return lc->rom[offset];
@@ -73,6 +81,9 @@ uint8_t a2_language_card_peek(a2_language_card_t *lc, unsigned offset) {
   fprintf(stderr, "a2_language_card_peek: invalid banked_memory_ram_select %d\n", lc->banked_memory_ram_select);
 }
 
+// Like above, except write a bytes to RAM at the given offset from the start
+// of the langauge card memory region $D000-$FFFF. Writes always go to RAM,
+// respecting the current bank and write protection.
 void a2_language_card_poke(a2_language_card_t *lc, unsigned offset, uint8_t value) {
   if (lc->banked_memory_write_protect) {
     fprintf(stderr, "a2_language_card_poke: write to protected banked memory at offset 0x%04X, value = 0x%02X\n", offset, value);
@@ -97,14 +108,33 @@ void a2_language_card_poke(a2_language_card_t *lc, unsigned offset, uint8_t valu
   lc->visible_memory_dirty = true;
 }
 
+// Used to copy the program-visible language card state into a flat
+// ram buffer, used for dumping debug state.  
 void a2_language_card_sync_ram(a2_language_card_t *lc, uint8_t *ram) {
   if (!lc->visible_memory_dirty)
     return;
-  for (unsigned offset = 0; offset < 0x3000; ++offset)
-    ram[0xD000 + offset] = a2_language_card_peek(lc, offset);
+  uint8_t *dst = ram + 0xD000;
+
+  if (lc->banked_memory_read_rom) {
+    memcpy(dst, lc->rom, sizeof(lc->rom));
+  } else {
+    switch (lc->banked_memory_ram_select) {
+    case A2_LC_RAM1:
+      memcpy(dst, lc->bank1_ram, sizeof(lc->bank1_ram));
+      break;
+    case A2_LC_RAM2:
+      memcpy(dst, lc->bank2_ram, sizeof(lc->bank2_ram));
+      break;
+    default:
+      fprintf(stderr, "a2_language_card_sync_ram: invalid banked_memory_ram_select %d\n", lc->banked_memory_ram_select);
+      return;
+    }
+    memcpy(dst + sizeof(lc->bank1_ram), lc->high_ram, sizeof(lc->high_ram));
+  }
   lc->visible_memory_dirty = false;
 }
 
+// Handle changes to soft switches that affect the language card's banked memory state.
 // See truth table at the top of this file for how the banked memory is selected and write protected.
 void a2_language_card_decode_peek(a2_language_card_t *lc, uint16_t addr, uint16_t prev_addr) {
   const bool prev_read_rom = lc->banked_memory_read_rom;
