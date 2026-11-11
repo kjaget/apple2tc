@@ -147,7 +147,8 @@ bool a2_disk2_mount(a2_disk2_t *disk, int drive_num, const uint8_t *dsk_data, si
 
   drv->position = 0;
   drv->current_track = 0;
-  drv->write_protected = true;
+  // Mounted DSK images are private in-memory copies, so they are writable.
+  drv->write_protected = false;
   drv->mounted = true;
   drv->skip = false;
 
@@ -162,32 +163,7 @@ void a2_disk2_unmount(a2_disk2_t *disk, int drive_num) {
   drv->nib_data = NULL;
   drv->mounted = false;
 }
-static const int8_t kDetentFromPhases[16] = {
-  // Phase0 | Phase1 | Phase2 | Phase3 | Detent
-  //   0    | 0      | 0      | 0      | -1  N/A
-  //   1    | 0      | 0      | 0      | 0
-  //   0    | 1      | 0      | 0      | 2
-  //   1    | 1      | 0      | 0      | 1
-  
-  //   0    | 0      | 1      | 0      | 4
-  //   1    | 0      | 1      | 0      | -1  N/A
-  //   0    | 1      | 1      | 0      | 3
-  //   1    | 1      | 1      | 0      | 2
 
-  //   0    | 0      | 0      | 1      | 6
-  //   1    | 0      | 0      | 1      | 7
-  //   0    | 1      | 0      | 1      | -1  N/A
-  //   1    | 1      | 0      | 1      | 0
-
-  //   0    | 0      | 1      | 1      | 5
-  //   1    | 0      | 1      | 1      | 6
-  //   0    | 1      | 1      | 1      | 4
-  //   1    | 1      | 1      | 1      | -1  N/A
-
-  -1, 0,2,1,4,-1,3,2,6,7,-1,0,5,6,4,-1
-
-};
-#include <stdio.h>
 /// Handle stepper motor phase changes (offsets 0x0-0x7).
 ///
 /// Uses the AppleWin algorithm: on every phase change (ON or OFF), compute
@@ -198,14 +174,12 @@ static const int8_t kDetentFromPhases[16] = {
 static void handle_stepper(a2_disk2_t *disk, unsigned offset) {
   int phase_num = offset >> 1;
   bool phase_on = offset & 1;
-  // printf("handle_stepper: phase %d, %s\n", phase_num, phase_on ? "ON" : "OFF");
 
   if (phase_on)
     disk->phases |= (1 << phase_num);
   else
     disk->phases &= ~(1 << phase_num);
 
-  #if 1
   // Compute direction from the current half-track position.
   // phase_position is the half-track (0-69). Use it mod 4 directly
   // to check which adjacent phases are energized.
@@ -215,8 +189,6 @@ static void handle_stepper(a2_disk2_t *disk, unsigned offset) {
     direction += 1;
   if (disk->phases & (1 << ((pp + 3) & 3)))
     direction -= 1;
-
-  // printf("handle_stepper: ->phases =%04X, phase_position %d, direction %d\n", disk->phases, pp, direction);
 
   if (direction != 0) {
     disk->phase_position += direction;
@@ -234,40 +206,6 @@ static void handle_stepper(a2_disk2_t *disk, unsigned offset) {
       // drv->position = 0;
     }
   }
-  #else
-  a2_disk2_drive_t *drv = &disk->drive[disk->selected_drive];
-  const int16_t cur_track = drv->current_track;
-  const int8_t cur_phase = (cur_track % 8);
-  int16_t track = drv->current_track;
-  const int8_t detent = kDetentFromPhases[disk->phases & 0x0F];
-
-  printf("handle_stepper: ->phases =%01X, cur_track = %d, cur_phase %d, detent %d\n", disk->phases, cur_track, cur_phase, detent);
-    if (detent == -1) return;           // no net force / ambiguous
-    if (detent == cur_phase) return;    // already at requested detent
-
-    // Shortest-path rotation around the phase octagon: pick the smaller
-    // of the CW/CCW arcs, and step the head by that many quarter-tracks.
-    uint8_t slice_add      = (detent - cur_phase) & 7;
-    uint8_t slice_subtract = (cur_phase - detent) & 7;
-    printf("handle_stepper: slice_add = %d, slice_subtract = %d\n", slice_add, slice_subtract);
-    if (slice_add == slice_subtract) return;
-
-    if (slice_subtract < slice_add) {
-        track -= slice_subtract;
-    } else {
-        track += slice_add;
-    }
-    printf("handle_stepper: new track = %d\n", track);
-
-    if (track < 0) track = 0;
-    if (track > 139) track = 139;
-
-    if (track != cur_track) {
-        printf("New track: %d\n", track);
-        drv->current_track = track;
-        // drv->position = 0;
-    }
-    #endif
 }
 
 /// Check if the motor is spinning (on or coasting down).
@@ -311,7 +249,30 @@ static uint8_t read_nibble(a2_disk2_t *disk, unsigned cycles) {
   return disk->data_register & 0x7F;
 }
 
-uint8_t a2_disk2_peek(a2_disk2_t *disk, unsigned offset, unsigned cycles) {
+/// Write one byte from the shift register to the current track position.
+///
+/// The simplified DSK implementation stores the byte at the current nibble
+/// position and advances the circular track, matching the byte-level write
+/// path described in the Disk II implementation guide. The mounted image is
+/// an owned, nibblized copy, so changes remain available for subsequent reads
+/// for as long as the disk stays mounted.
+static void write_nibble(a2_disk2_t *disk, unsigned cycles) {
+  a2_disk2_drive_t *drv = &disk->drive[disk->selected_drive];
+  if (!drv->mounted || drv->write_protected || !is_motor_spinning(disk, cycles))
+    return;
+
+  uint8_t *track = drv->nib_data + drv->current_track * DISK2_NIB_TRACK_SIZE;
+  track[drv->position] = disk->data_register;
+  drv->position = (drv->position + 1) % DISK2_NIB_TRACK_SIZE;
+  disk->last_nibble_cycle = cycles;
+}
+
+#include <stdio.h>
+/// Apply a Disk II soft-switch access and return the value seen by a CPU read.
+/// The switches themselves respond identically to reads and writes; only the
+/// data-register transfer and shift-register write depend on the access type.
+static uint8_t access_switch(
+    a2_disk2_t *disk, unsigned offset, uint8_t value, unsigned cycles, bool is_write) {
   switch (offset) {
   case 0x0: case 0x1: case 0x2: case 0x3:
   case 0x4: case 0x5: case 0x6: case 0x7:
@@ -331,31 +292,45 @@ uint8_t a2_disk2_peek(a2_disk2_t *disk, unsigned offset, unsigned cycles) {
   case 0xB:
     disk->selected_drive = 1;
     break;
-  case 0xC:
+  case 0xC: // Q6L
     disk->q6 = false;
-    if (!disk->q7)
+    if (!disk->q7 && !is_write)
       return read_nibble(disk, cycles);
+    if (disk->q7 && is_write)
+      write_nibble(disk, cycles);
     break;
-  case 0xD:
+  case 0xD: // Q6H
     disk->q6 = true;
     if (!disk->q7) {
       a2_disk2_drive_t *drv = &disk->drive[disk->selected_drive];
-      return drv->write_protected ? 0xFF : 0x00;
+      if (!is_write) {
+        // Q6H presents write-protect status to the shift register. Software
+        // commonly reads Q7L next, which returns this latched value.
+        disk->data_register = drv->write_protected ? 0x80 : 0x00;
+        return disk->data_register;
+      }
+    } else if (is_write) {
+      disk->data_register = value;
     }
     break;
-  case 0xE:
+  case 0xE: // Q7L
     disk->q7 = false;
     break;
-  case 0xF:
+  case 0xF: // Q7H
     disk->q7 = true;
+    if (is_write)
+      disk->data_register = value;
     break;
   }
   return disk->data_register;
 }
 
+uint8_t a2_disk2_peek(a2_disk2_t *disk, unsigned offset, unsigned cycles) {
+  return access_switch(disk, offset, 0, cycles, false);
+}
+
 void a2_disk2_poke(a2_disk2_t *disk, unsigned offset, uint8_t value, unsigned cycles) {
-  (void)value;
-  a2_disk2_peek(disk, offset, cycles);
+  (void)access_switch(disk, offset, value, cycles, true);
 }
 
 /// Disk II P5 boot ROM (16-sector), mapped at $C600-$C6FF for slot 6.

@@ -516,6 +516,79 @@ static void test_clock_extension(void) {
   a2_io_done(&io3);
 }
 
+/// A Q7-high/Q6-high write loads the shift register, and Q6L writes that byte
+/// to the mounted nibble track. Mounted DSK images are writable copies; an
+/// explicitly write-protected drive must ignore subsequent write strobes.
+static void test_disk2_write(void) {
+  enum { DSK_SIZE = 35 * 16 * 256, NIB_TRACK_SIZE = 6656 };
+  a2_disk2_t disk;
+  uint8_t *image = (uint8_t *)calloc(DSK_SIZE, 1);
+  a2_disk2_init(&disk);
+
+  check(image != NULL, "a DSK image can be allocated for Disk II write testing");
+  if (!image) {
+    a2_disk2_done(&disk);
+    return;
+  }
+
+  bool mounted = a2_disk2_mount(&disk, 0, image, DSK_SIZE);
+  check(mounted, "a DSK image mounts");
+  if (!mounted) {
+    a2_disk2_done(&disk);
+    free(image);
+    return;
+  }
+  check(!disk.drive[0].write_protected, "a mounted DSK copy is writable");
+  a2_disk2_peek(&disk, 0xD, 10); // Q6H latches write-protect sense.
+  uint8_t wp_status = a2_disk2_peek(&disk, 0xE, 11); // Q7L returns it.
+  check((wp_status & 0x80) == 0, "Q6H then Q7L reports writable media");
+
+  disk.drive[0].write_protected = true;
+  a2_disk2_peek(&disk, 0xD, 12);
+  wp_status = a2_disk2_peek(&disk, 0xE, 13);
+  check((wp_status & 0x80) != 0, "Q6H then Q7L reports write-protected media");
+
+  disk.drive[0].write_protected = false;
+  a2_disk2_poke(&disk, 0x9, 0, 100); // Motor on.
+  a2_disk2_poke(&disk, 0xF, 0x11, 101); // Q7H and CPU bus value.
+  a2_disk2_poke(&disk, 0xD, 0xA5, 102); // Q6H loads the shift register.
+  a2_disk2_poke(&disk, 0xC, 0, 103); // Q6L writes and advances.
+  a2_disk2_poke(&disk, 0xD, 0x5A, 104);
+  a2_disk2_poke(&disk, 0xC, 0, 105);
+
+  check(
+      disk.drive[0].nib_data[0] == 0xA5,
+      "the first loaded byte is written at the current position");
+  check(
+      disk.drive[0].nib_data[1] == 0x5A,
+      "each write advances to the next nibble position");
+  check(
+      disk.drive[0].position == 2,
+      "the disk position advances once per write strobe");
+
+  disk.drive[0].write_protected = true;
+  a2_disk2_poke(&disk, 0xD, 0xC3, 106);
+  a2_disk2_poke(&disk, 0xC, 0, 107);
+  check(
+      disk.drive[0].nib_data[2] != 0xC3,
+      "write-protected media ignores write strobes");
+  check(
+      disk.drive[0].position == 2,
+      "write protection also prevents position advancement");
+
+    disk.drive[0].write_protected = false;
+    disk.drive[0].position = NIB_TRACK_SIZE - 1;
+    a2_disk2_poke(&disk, 0xD, 0x3C, 108);
+    a2_disk2_poke(&disk, 0xC, 0, 109);
+    check(
+      disk.drive[0].nib_data[NIB_TRACK_SIZE - 1] == 0x3C,
+      "the last nibble position accepts a write");
+    check(disk.drive[0].position == 0, "the nibble position wraps at the track end");
+
+  a2_disk2_done(&disk);
+  free(image);
+}
+
 int main(void) {
   test_speaker();
   test_kbdstrb();
@@ -528,6 +601,7 @@ int main(void) {
   test_paddle_stays_expired();
   test_paddle_rearm();
   test_buttons_and_mirroring();
+  test_disk2_write();
   test_game_port();
 
   if (failures) {
