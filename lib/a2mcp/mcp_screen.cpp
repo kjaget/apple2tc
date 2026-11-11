@@ -56,7 +56,7 @@ void draw_glyph(void *ctx, uint8_t ch, unsigned x, unsigned y) {
 std::string screen_text(void) {
   TextCtx ctx;
   ctx.out.reserve(24 * 41);
-  apple2_decode_text_screen(get_ram() + a2_io_get_text_page_offset(a2host_io()), &ctx, draw_glyph);
+  apple2_decode_text_screen(get_text_page(a2_io_get_vidpage_index(a2host_io())), &ctx, draw_glyph);
   return ctx.out;
 }
 
@@ -85,7 +85,7 @@ const char *const kGrColours[16] = {
 
 std::string screen_gr(void) {
   const a2_iostate_t *io = a2host_io();
-  const uint8_t *page = get_ram() + a2_io_get_text_page_offset(io);
+  const uint8_t *page = get_text_page(a2_io_get_vidpage_index(io));
   const bool mixed = a2_io_is_vidmode_mixed(io);
   // In mixed mode the bottom four text rows replace the last eight cell rows.
   const unsigned cell_rows = mixed ? 40 : 48;
@@ -142,7 +142,9 @@ void png_sink(void *ctx, void *data, int size) {
 std::string
 screen_png(a2_hgr_mode_t hgr_mode, unsigned scale, unsigned blend, unsigned *out_frames_used) {
   const a2_iostate_t *io = a2host_io();
-  const uint8_t *ram = get_ram();
+  const uint8_t page = a2_io_get_vidpage_index(io);
+  const uint8_t *text_page = get_text_page(page);
+  const uint8_t *hires_page = get_hires_page(page);
   // Blink phase is a function of wall-clock time in the renderers, so a fixed
   // value is passed instead: a screenshot of a paused machine must not depend
   // on when it was taken.
@@ -154,23 +156,23 @@ screen_png(a2_hgr_mode_t hgr_mode, unsigned scale, unsigned blend, unsigned *out
   const a2_vidmode_t vidmode = a2_io_get_vidmode(io);
   switch (vidmode) {
   case A2_VIDMODE_TEXT:
-    apple2_render_text_screen(ram + a2_io_get_text_page_offset(io), &screen, kBlinkMs);
+    apple2_render_text_screen(text_page, &screen, kBlinkMs);
     break;
   case A2_VIDMODE_GR:
-    apple2_render_gr_screen(ram + a2_io_get_text_page_offset(io), &screen, kBlinkMs, mixed);
+    apple2_render_gr_screen(text_page, &screen, kBlinkMs, mixed);
     break;
   case A2_VIDMODE_HGR: {
     // `blend`'s composited page, kept alive past this switch case (the
     // renderer call below reads through `hgr_page`) but only ever filled in
     // -- and only ever pointed at -- when `blend` actually applies.
     static uint8_t blended[kHgrPageBytes];
-    const uint8_t *hgr_page = ram + a2_io_get_hires_page_offset(io);
+    const uint8_t *hgr_page = hires_page;
     if (blend > 1) {
       frames_used = screen_blend_composite(blend, blended);
       hgr_page = blended;
     }
     apple2_render_hgr_screen_mode(
-        hgr_page, ram + a2_io_get_text_page_offset(io), &screen, kBlinkMs, mixed, hgr_mode);
+        hgr_page, text_page, &screen, kBlinkMs, mixed, hgr_mode);
     break;
   }
   }

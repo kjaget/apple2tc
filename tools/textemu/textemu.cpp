@@ -8,7 +8,6 @@
 #include "apple2tc/a2io.h"
 #include "apple2tc/apple2.h"
 #include "apple2tc/apple2plus_rom.h"
-#include "apple2tc/d6502.h"
 #include "apple2tc/support.h"
 
 #include <chrono>
@@ -51,7 +50,7 @@ public:
   virtual void shutdown() = 0;
   /// Non-blocking key read. Returns Apple II key code (0-127), KEY_A2RESET, KEY_QUIT, or KEY_NONE.
   virtual int readKey() = 0;
-  virtual void updateScreen(Emu6502 *emu) = 0;
+  virtual void updateScreen(EmuApple2 *emu) = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -84,14 +83,14 @@ public:
     return translateKey(ch);
   }
 
-  void updateScreen(Emu6502 *emu) override {
+  void updateScreen(EmuApple2 *emu) override {
     uint8_t current[24][40];
     struct Ctx {
       uint8_t (*buf)[40];
     } ctx{current};
 
     apple2_decode_text_screen(
-        static_cast<EmuApple2 *>(emu)->getTextPage(0), &ctx,
+        emu->getTextPage(0), &ctx,
         [](void *vctx, uint8_t ch, unsigned x, unsigned y) {
           static_cast<Ctx *>(vctx)->buf[y][x] = ch;
         });
@@ -244,7 +243,7 @@ public:
     return ch;
   }
 
-  void updateScreen(Emu6502 *emu) override {
+  void updateScreen(EmuApple2 *emu) override {
     uint8_t ch = emu->ram_peek(ZP_CH);
     uint8_t cv = emu->ram_peek(ZP_CV);
 
@@ -266,7 +265,7 @@ public:
       return;
     }
 
-    const uint8_t *textPage = static_cast<EmuApple2 *>(emu)->getTextPage(0);
+    const uint8_t *textPage = emu->getTextPage(0);
     uint8_t curCV = lastCV_;
     uint8_t curCH = lastCH_;
 
@@ -315,8 +314,8 @@ static void installSignalHandlers() {
 // Screen dump (for --dump-screen)
 // ---------------------------------------------------------------------------
 
-static void dumpTextScreen(const Emu6502 *emu) {
-  const uint8_t *page = static_cast<const EmuApple2 *>(emu)->getTextPage(0);
+static void dumpTextScreen(const EmuApple2 *emu) {
+  const uint8_t *page = emu->getTextPage(0);
   for (unsigned y = 0; y < 24; ++y) {
     unsigned offset = (y % 8) * 128 + (y / 8) * 40;
     for (unsigned x = 0; x < 40; ++x) {

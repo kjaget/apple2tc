@@ -98,6 +98,14 @@ const uint8_t *get_ram(void) {
   return s_ram;
 }
 
+const uint8_t *get_text_page(unsigned page_index) {
+  return s_ram + (page_index ? 0x0800 : 0x0400);
+}
+
+const uint8_t *get_hires_page(unsigned page_index) {
+  return s_ram + (page_index ? 0x4000 : 0x2000);
+}
+
 void ram_poke(uint16_t addr, uint8_t value) {
   ram_poke_impl(addr, value);
 }

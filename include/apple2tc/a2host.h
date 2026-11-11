@@ -37,6 +37,13 @@ uint8_t io_peek(uint16_t addr);
 /// Write the $C000-$CFFF soft-switch range.
 void io_poke(uint16_t addr, uint8_t value);
 
+/// io_load_rom loads a ROM into the high address space of the machine.
+void io_load_rom(const uint8_t *rom, uint16_t size);
+
+/// Refresh the main flat RAM view from switched RAM/ROM and banked RAM 
+/// based on the settings of the language card soft switches.
+void io_refresh_main_ram_view(uint8_t *ram);
+
 /// Called at each basic block when `g_debug` asks for it. See `a2engine.h`.
 void debug_asm(uint16_t pc);
 

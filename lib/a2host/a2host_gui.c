@@ -291,24 +291,23 @@ static void apply_persistence(bool decayThisFrame) {
 static void update_screen(bool decayThisFrame) {
   // Milliseconds since hw reset. Used to determine blink phase.
   uint64_t ms = (uint64_t)stm_ms(stm_diff(curFrameTick_, firstFrameTick_));
+  const uint8_t page = a2_io_get_vidpage_index(a2host_io());
+  const uint8_t *textPage = get_text_page(page);
+  const uint8_t *hiresPage = get_hires_page(page);
 
   switch (a2_io_get_vidmode(a2host_io())) {
   case A2_VIDMODE_TEXT:
-    apple2_render_text_screen(get_ram() + a2_io_get_text_page_offset(a2host_io()), &screen_, ms);
+    apple2_render_text_screen(textPage, &screen_, ms);
     break;
   case A2_VIDMODE_GR:
-    apple2_render_gr_screen(
-        get_ram() + a2_io_get_text_page_offset(a2host_io()),
-        &screen_,
-        ms,
-        a2_io_is_vidmode_mixed(a2host_io()));
+    apple2_render_gr_screen(textPage, &screen_, ms, a2_io_is_vidmode_mixed(a2host_io()));
     break;
   case A2_VIDMODE_HGR:
   default:;
     bool mixed = a2_io_is_vidmode_mixed(a2host_io());
     apple2_render_hgr_screen_mode(
-        get_ram() + a2_io_get_hires_page_offset(a2host_io()),
-        get_ram() + a2_io_get_text_page_offset(a2host_io()),
+        hiresPage,
+        textPage,
         &screen_,
         ms,
         mixed,

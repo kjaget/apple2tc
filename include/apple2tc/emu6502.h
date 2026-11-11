@@ -132,10 +132,6 @@ public:
   /// Read a byte from the RAM buffer. The RAM buffer is not necessarily what
   /// the CPU sees, as it may be overlapped by IO, etc.
   [[nodiscard]] uint8_t ram_peek(uint16_t addr) {
-    refreshMainRAMView();
-    // if (addr >= ioRangeStart_ && addr <= ioRangeEnd_)
-    //   fprintf(stderr, "ram_peek: addr = 0x%04X is in IO range\n", addr);
-    // return ram_[addr];
     return peek(addr);
   }
   /// Read a 16-bit word from the RAM buffer. The RAM buffer is not necessarily
@@ -146,11 +142,7 @@ public:
   /// Write a byte into the RAM buffer. This is not the same as writing it into
   /// the address space: no IO decoding is performed, etc.
   void ram_poke(uint16_t addr, uint8_t value) {
-    refreshMainRAMView();
-    if (addr >= ioRangeStart_ && addr <= ioRangeEnd_)
-      fprintf(stderr, "ram_poke: addr = 0x%04X value = 0x%02X is in IO range\n", addr, value);
     poke(addr, value);
-    // ram_[addr] = value;
   }
 
   /// Read a byte from memory, iospace, soft switches, etc. Note that there

@@ -385,6 +385,14 @@ void io_poke(uint16_t addr, uint8_t value) {
   a2_io_poke(&io_, addr, value, get_cycles());
 }
 
+void io_load_rom(const uint8_t *rom, uint16_t size) {
+  a2_language_card_load_rom(&io_.language_card, rom, size);
+}
+
+void io_refresh_main_ram_view(uint8_t *ram) {
+  a2_language_card_sync_ram(&io_.language_card, ram);
+}
+
 typedef struct {
   uint16_t addr;
   uint8_t size;
@@ -1096,7 +1104,6 @@ void a2host_simulate_frame(void) {
 /// mismatch. That is the intended behaviour: it is game state, not scratch.
 static uint64_t hash_video_state(void) {
   uint64_t h = 1469598103934665603ULL;
-  const uint8_t *ram = get_ram();
 
   uint8_t header[2] = {
       (uint8_t)a2_io_get_vidmode(&io_), (uint8_t)a2_io_is_vidmode_mixed(&io_)};
@@ -1105,16 +1112,17 @@ static uint64_t hash_video_state(void) {
     h *= 1099511628211ULL;
   }
 
-  const uint8_t *text = ram + a2_io_get_text_page_offset(&io_);
-  for (unsigned i = 0; i < 0x400; ++i) {
-    h ^= text[i];
-    h *= 1099511628211ULL;
-  }
-
-  const uint8_t *hires = ram + a2_io_get_hires_page_offset(&io_);
-  for (unsigned i = 0; i < 0x2000; ++i) {
-    h ^= hires[i];
-    h *= 1099511628211ULL;
+  for (unsigned page = 0; page < 2; ++page) {
+    const uint8_t *text = get_text_page(page);
+    for (unsigned i = 0; i < 0x400; ++i) {
+      h ^= text[i];
+      h *= 1099511628211ULL;
+    }
+    const uint8_t *hires = get_hires_page(page);
+    for (unsigned i = 0; i < 0x2000; ++i) {
+      h ^= hires[i];
+      h *= 1099511628211ULL;
+    }
   }
 
   return h;
@@ -1132,9 +1140,9 @@ static uint64_t hash_video_state(void) {
 /// hash exists for that "did the screen change" question instead.
 uint64_t a2host_visible_hash(void) {
   uint64_t h = 1469598103934665603ULL;
-  const uint8_t *ram = get_ram();
   const a2_vidmode_t mode = a2_io_get_vidmode(&io_);
   const bool mixed = a2_io_is_vidmode_mixed(&io_);
+  const uint8_t page = a2_io_get_vidpage_index(&io_);
 
   uint8_t header[2] = {(uint8_t)mode, (uint8_t)mixed};
   for (unsigned i = 0; i < sizeof(header); ++i) {
@@ -1145,14 +1153,14 @@ uint64_t a2host_visible_hash(void) {
   // The text page is displayed in TEXT, and in the bottom four lines of a
   // mixed graphics mode. GR reads the same page as the text mode does.
   if (mode != A2_VIDMODE_HGR || mixed) {
-    const uint8_t *text = ram + a2_io_get_text_page_offset(&io_);
+    const uint8_t *text = get_text_page(page);
     for (unsigned i = 0; i < 0x400; ++i) {
       h ^= text[i];
       h *= 1099511628211ULL;
     }
   }
   if (mode == A2_VIDMODE_HGR) {
-    const uint8_t *hires = ram + a2_io_get_hires_page_offset(&io_);
+    const uint8_t *hires = get_hires_page(page);
     for (unsigned i = 0; i < 0x2000; ++i) {
       h ^= hires[i];
       h *= 1099511628211ULL;

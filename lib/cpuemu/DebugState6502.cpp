@@ -339,11 +339,12 @@ void DebugState6502::saveGeneration(const Emu6502 *emu, Emu6502::Regs regs) {
   auto &gen = generations_.back();
 
   unsigned from = 0;
+  const auto &ram = emu->getMainRAM();
   while ((from = memExecFull_.findSetBit(from)) != memExecFull_.size()) {
     unsigned to = memExecFull_.findClearBit(from + 1);
     fprintf(stderr, "  Segment [$%04X..$%04X]\n", from, to - 1);
     branchTargets_.insert(from);
-    gen.addRange(from, to - from, emu->getMainRAM() + from);
+    gen.addRange(from, to - from, ram + from);
     memWritten_.setMulti(from, to, false);
     if (to == memExecFull_.size())
       break;

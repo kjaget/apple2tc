@@ -20,7 +20,6 @@
 
 #include <cstdio>
 #include <cstring>
-#include <vector>
 
 namespace a2mcp {
 namespace {
@@ -67,7 +66,7 @@ void blend_capture(void) {
     blend_reset();
   s_blend.last_mode = mode;
   s_blend.last_page = page;
-  memcpy(s_blend.frames[s_blend.next], get_ram() + a2_io_get_hires_page_offset(io), kHgrPageBytes);
+  memcpy(s_blend.frames[s_blend.next], get_hires_page(page), kHgrPageBytes);
   s_blend.next = (s_blend.next + 1) % kBlendMaxFrames;
   if (s_blend.count < kBlendMaxFrames)
     ++s_blend.count;

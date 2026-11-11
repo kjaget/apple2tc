@@ -95,6 +95,8 @@ void set_regs(regs_t r);
 regs_t get_regs(void);
 unsigned get_cycles(void);
 const uint8_t * get_ram(void);
+const uint8_t *get_text_page(unsigned page_index);
+const uint8_t *get_hires_page(unsigned page_index);
 void ram_poke(uint16_t addr, uint8_t value);
 uint8_t ram_peek(uint16_t addr);
 uint16_t ram_peek16(uint16_t addr);

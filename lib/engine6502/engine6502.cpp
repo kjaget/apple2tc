@@ -31,6 +31,7 @@
 
 #include "apple2tc/DebugState6502.h"
 #include "apple2tc/a2io.h"
+#include "apple2tc/apple2iodefs.h"
 #include "apple2tc/apple2plus_rom.h"
 #include "apple2tc/emu6502.h"
 #include "apple2tc/support.h"
@@ -51,6 +52,13 @@ class HostedEmu : public Emu6502 {
 public:
   HostedEmu() : Emu6502(0xC000, 0xFFFF) {}
 
+  const uint8_t *getTextPage(unsigned pageIndex) const {
+    return ram_ + (pageIndex ? A2_TXT2SCRN : A2_TXT1SCRN);
+  }
+  const uint8_t *getHiresPage(unsigned pageIndex) const {
+    return ram_ + (pageIndex ? A2_HGR2SCRN : A2_HGR1SCRN);
+  }
+
 protected:
   uint8_t ioPeek(uint16_t addr) override {
     return io_peek(addr);
@@ -59,7 +67,10 @@ protected:
     io_poke(addr, value);
   }
   void ioLoadROM(const uint8_t *rom, uint16_t size) override {
-    a2_language_card_load_rom(&a2host_io()->language_card, rom, size);
+    io_load_rom(rom, size);
+  }
+  void refreshMainRAMView() override { 
+    io_refresh_main_ram_view(ram_);
   }
 };
 
@@ -239,6 +250,14 @@ unsigned get_cycles(void) {
 
 const uint8_t *get_ram(void) {
   return s_emu.getMainRAM();
+}
+
+const uint8_t *get_text_page(unsigned page_index) {
+  return s_emu.getTextPage(page_index);
+}
+
+const uint8_t *get_hires_page(unsigned page_index) {
+  return s_emu.getHiresPage(page_index);
 }
 
 void ram_poke(uint16_t addr, uint8_t value) {

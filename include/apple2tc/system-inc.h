@@ -89,6 +89,15 @@ unsigned get_cycles(void) {
 const uint8_t *get_ram(void) {
   return s_ram;
 }
+
+const uint8_t *get_text_page(unsigned page_index) {
+  return s_ram + (page_index ? 0x0800 : 0x0400);
+}
+
+const uint8_t *get_hires_page(unsigned page_index) {
+  return s_ram + (page_index ? 0x4000 : 0x2000);
+}
+
 static inline void ram_poke_impl(uint16_t addr, uint8_t value) {
   if (g_debug & DebugMem)
     printf("$%04x: $%04x=$%02x\n", s_pc, addr, value);
