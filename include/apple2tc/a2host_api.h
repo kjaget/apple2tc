@@ -37,6 +37,13 @@
 extern "C" {
 #endif
 
+/// Reserved values in cycle-stamped key files for host actions that are not
+/// Apple II keyboard characters. Ordinary keyboard bytes remain 0-255.
+enum {
+  A2HOST_KEY_DISK1_TOGGLE = 256,
+  A2HOST_KEY_DISK2_TOGGLE = 257,
+};
+
 /* --- Setup ---------------------------------------------------------------- */
 
 /// Send probe `printf` output to stderr rather than stdout, for a front end

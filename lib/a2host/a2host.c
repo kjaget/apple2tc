@@ -33,7 +33,7 @@
 
 typedef struct KeyPress {
   unsigned cycles;
-  uint8_t ch;
+  unsigned ch;
 } KeyPress;
 
 static bool sound_enabled_ = true;
@@ -273,6 +273,12 @@ bool a2host_toggle_disk_image(int drive) {
   if (drive < 0 || drive > 1)
     return false;
 
+  // Keep the host-only F8/F9 actions in the same cycle-stamped stream as
+  // ordinary keyboard input, so --trace-keys recordings replay disk changes.
+  if (trace_keys_)
+    printf("%u %u\n", get_cycles(),
+           drive == 0 ? A2HOST_KEY_DISK1_TOGGLE : A2HOST_KEY_DISK2_TOGGLE);
+
   const char *next = NULL;
   if (disk_active_alternate_[drive]) {
     next = disk_primary_path_[drive];
@@ -427,7 +433,7 @@ void add_default_nondebug(void) {
 }
 
 static unsigned s_numDebugLines = 0;
-enum { MAX_DEBUG_LINES = 20000000 };
+enum { MAX_DEBUG_LINES = 2000000000 };
 
 void debug_asm(uint16_t pc) {
   for (unsigned i = 0; i != s_num_nondebug; ++i) {
@@ -589,6 +595,20 @@ static void press_key(uint8_t ch) {
   key_arrives(ch, true);
 }
 
+/// Deliver one cycle-stamped input event. Values above the keyboard byte
+/// range are reserved for host actions and never enter Apple II keyboard IO.
+static void deliver_key_event(unsigned ch) {
+  if (ch == A2HOST_KEY_DISK1_TOGGLE) {
+    a2host_toggle_disk_image(0);
+    return;
+  }
+  if (ch == A2HOST_KEY_DISK2_TOGGLE) {
+    a2host_toggle_disk_image(1);
+    return;
+  }
+  press_key((uint8_t)ch);
+}
+
 /// A live keystroke from the window.
 static void press_key_live(uint8_t ch) {
   // While recording, at most one live key per `record` coordinate, and the
@@ -696,7 +716,7 @@ static void drain_key_presses() {
   // one coordinate to the other.
   while (next_key_press_ != key_press_count_ && cycles >= key_presses_[next_key_press_].cycles) {
     key_from_replay_ = true;
-    press_key(key_presses_[next_key_press_].ch);
+    deliver_key_event(key_presses_[next_key_press_].ch);
     key_from_replay_ = false;
     ++next_key_press_;
   }
@@ -736,7 +756,7 @@ void probe_deliver_keys(uint32_t now) {
   // two share key_presses_ and must divert identically while recording.
   while (next_key_press_ != key_press_count_ && key_presses_[next_key_press_].cycles <= now) {
     key_from_replay_ = true;
-    press_key(key_presses_[next_key_press_].ch);
+    deliver_key_event(key_presses_[next_key_press_].ch);
     key_from_replay_ = false;
     ++next_key_press_;
   }
@@ -806,7 +826,8 @@ static void load_key_file(const char *path) {
     if (c == EOF)
       break;
     ungetc(c, f);
-    if ((res = fscanf(f, "%u %u\n", &cycles, &ch)) != 2) {
+    if ((res = fscanf(f, "%u %u\n", &cycles, &ch)) != 2 ||
+      (ch > 255 && ch != A2HOST_KEY_DISK1_TOGGLE && ch != A2HOST_KEY_DISK2_TOGGLE)) {
       fprintf(stderr, "Error parsing key file\n");
       exit(2);
     }
@@ -821,7 +842,7 @@ static void load_key_file(const char *path) {
         abort();
     }
     key_presses_[key_press_count_].cycles = cycles;
-    key_presses_[key_press_count_].ch = (uint8_t)ch;
+    key_presses_[key_press_count_].ch = ch;
     ++key_press_count_;
   }
   fprintf(stderr, "Loaded %u keys\n", key_press_count_);
@@ -1253,7 +1274,7 @@ static void print_help(void) {
   printf(" --help           This help\n");
   printf(" --no-sound       Disable sound\n");
   printf(" --kbd-file=path  Read ascii keyboard input from the specified file\n");
-  printf(" --key-file=path  Read key presses and cycles from the specified file\n");
+  printf(" --key-file=path  Read key presses and host actions from a cycle-stamped file\n");
   printf(" --disk1=path     Mount a disk image in drive 1\n");
   printf(" --disk1-alt=path Alternate disk image for drive 1; F8 swaps it at runtime\n");
   printf(" --disk2=path     Mount a disk image in drive 2\n");
@@ -1262,7 +1283,8 @@ static void print_help(void) {
   printf(" --compat         Debug info compatible with the emulator\n");
   printf(" --trace          Dump state at branch targets\n");
   printf(" --trace-mem      Dump all memory writes\n");
-  printf(" --trace-keys     Dump key presses with cycle stamps, to stdout, for recording\n");
+  printf(" --trace-keys     Dump key presses/actions with cycle stamps, to stdout, for recording\n");
+  printf("                  Host actions: 256=F8 (swap drive 1), 257=F9 (swap drive 2)\n");
   printf(" --echo-keys      Print each delivered key to stderr, for watching a replay\n");
   printf(" --record-keys=p  Record keys pressed, stamped at a probe's `record`\n");
   printf(" --hash-frames=p  Write per-frame video state hashes to the given file\n");

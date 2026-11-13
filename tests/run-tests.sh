@@ -1579,6 +1579,24 @@ if [ "$tracecount" -ne 3 ]; then
   exit 1
 fi
 
+# F8/F9 are host actions rather than Apple II characters. Their reserved
+# cycle-stamped values must survive key-file parsing, invoke the corresponding
+# drive toggle during playback, and remain present in a trace.
+printf '0 256\n0 257\n' > probe-tmp/disk-switch.keys
+$a2run --frames=3 --trace-keys --key-file=probe-tmp/disk-switch.keys \
+  > probe-tmp/disk-switch.out 2> probe-tmp/disk-switch.err
+if ! grep -q '^0 256$' probe-tmp/disk-switch.out || ! grep -q '^0 257$' probe-tmp/disk-switch.out; then
+  echo "FAIL: --key-file= did not replay and trace the F8/F9 disk-toggle events" >&2
+  cat probe-tmp/disk-switch.out >&2
+  exit 1
+fi
+if ! grep -q 'No alternate disk configured for drive 1' probe-tmp/disk-switch.err ||
+   ! grep -q 'No alternate disk configured for drive 2' probe-tmp/disk-switch.err; then
+  echo "FAIL: F8/F9 key-file events did not invoke the corresponding disk toggles" >&2
+  cat probe-tmp/disk-switch.err >&2
+  exit 1
+fi
+
 # --echo-keys is the human-readable counterpart of --trace-keys above: stderr,
 # not stdout, one line per key actually delivered, with a running (n/total)
 # count while a --key-file= replay is driving delivery. The `#` line checks
