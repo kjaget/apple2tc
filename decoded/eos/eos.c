@@ -778,7 +778,7 @@ void run_emulated(unsigned run_cycles) {
   while (s_remaining_cycles > 0) {
     uint16_t tmp16;
     uint8_t tmp;
-    printf("PC: $%04X\n", s_pc);
+    printf("PC: $%04X, cycle = %d\n", s_pc, s_cycles);
     switch (s_pc) {
     case 0x0000: // [$0000..$0001]    2 bytes
       CYCLES(0x0000, 7);
@@ -1798,6 +1798,7 @@ void run_emulated(unsigned run_cycles) {
       // WARNING: performs self modification.
       // WARNING: operand self modification.
       /* $0960 STA */ poke(ram_peek16(0x0961) + s_y, s_a);
+      printf("STA at $0960, addr = $%04X, data = $%02X\n", ram_peek16(0x0961) + s_y, s_a);
       s_pc = 0x0963;
       break;
     case 0x0963: // [$0963..$0967]    5 bytes
@@ -1858,6 +1859,7 @@ void run_emulated(unsigned run_cycles) {
       // WARNING: performs self modification.
       // WARNING: operand self modification.
       /* $0987 STA */ poke(ram_peek16(0x0988) + s_y, s_a);
+      printf("STA at $0987, addr = $%04X, data = $%02X\n", ram_peek16(0x0988) + s_y, s_a);
       s_pc = 0x098a;
       break;
     case 0x0986: // [$0986..$0986]    1 bytes
@@ -1900,6 +1902,7 @@ void run_emulated(unsigned run_cycles) {
       // WARNING: performs self modification.
       // WARNING: operand self modification.
       /* $099F STA */ poke(ram_peek16(0x09a0) + s_y, s_a);
+      printf("STA at $099F, addr = $%04X, data = $%02X\n", ram_peek16(0x09a0) + s_y, s_a);
       s_pc = 0x09a2;
       break;
     case 0x099b: // [$099B..$099D]    3 bytes
@@ -9236,6 +9239,7 @@ void run_emulated(unsigned run_cycles) {
       CYCLES(0xbc6e, 5);
       // WARNING: operand self modification.
       /* $BC6E STA */ poke(ram_peek16(0xbc6f) + s_y, s_a);
+      printf("STA at $BC6E, addr = $%04X, data = $%02X\n", ram_peek16(0xbc6f) + s_y, s_a);
       s_pc = 0xbc71;
       break;
     case 0xbc71: // [$BC71..$BC75]    5 bytes
@@ -9273,6 +9277,7 @@ void run_emulated(unsigned run_cycles) {
       /* $BC92 EOR */ s_a = update_nz(s_a ^ peek(0xbe01 + s_x));
       // WARNING: operand self modification.
       /* $BC95 STA */ poke(ram_peek16(0xbc96) + s_y, s_a);
+      printf("STA at $BC95, addr = $%04X, data = $%02X\n", ram_peek16(0xbc96) + s_y, s_a);
       /* $BC98 INY */ s_y = update_nz(s_y + 1);
       /* $BC99 BNE */ s_pc = !(s_status & STATUS_Z) ? (s_cycles++, s_remaining_cycles--, 0xbc87) : 0xbc9b;
       branchTarget = true;
@@ -9297,6 +9302,7 @@ void run_emulated(unsigned run_cycles) {
       // WARNING: performs self modification.
       // WARNING: operand self modification.
       /* $BCAD STA */ poke(ram_peek16(0xbcae) + s_y, s_a);
+      printf("STA at $BCAD, addr = $%04X, data = $%02X\n", ram_peek16(0xbcae) + s_y, s_a);
       s_pc = 0xbcb0;
       break;
     case 0xbcb0: // [$BCB0..$BCB4]    5 bytes
@@ -10022,6 +10028,7 @@ void run_emulated(unsigned run_cycles) {
       /* $C6E2 LSR */ tmp16 = 0x0300 + s_x, tmp = peek(tmp16), set_c_to_bit0(tmp), poke(tmp16, update_nz(tmp >> 1));
       /* $C6E5 ROL */ tmp = s_a, s_a = update_nz((tmp << 1) | (s_status & STATUS_C)), set_c_to_bit0(tmp >> 7);
       /* $C6E6 STA */ poke(peek16_zpg(0x26) + s_y, s_a);
+      printf("STA at $C6E6, addr = $%04X, data = $%02X\n", peek16_zpg(0x26) + s_y, s_a);
       /* $C6E8 INY */ s_y = update_nz(s_y + 1);
       /* $C6E9 BNE */ s_pc = !(s_status & STATUS_Z) ? (s_cycles++, s_remaining_cycles--, 0xc6d9) : 0xc6eb;
       branchTarget = true;
