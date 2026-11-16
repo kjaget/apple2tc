@@ -108,6 +108,50 @@ void a2_language_card_poke(a2_language_card_t *lc, unsigned offset, uint8_t valu
   lc->visible_memory_dirty = true;
 }
 
+void a2_language_card_write_visible(
+    a2_language_card_t *lc,
+    unsigned offset,
+    const uint8_t *data,
+    size_t size) {
+  if (offset >= sizeof(lc->rom) || size == 0)
+    return;
+  if (size > sizeof(lc->rom) - offset)
+    size = sizeof(lc->rom) - offset;
+
+  if (lc->banked_memory_read_rom) {
+    memcpy(lc->rom + offset, data, size);
+    lc->visible_memory_dirty = true;
+    return;
+  }
+
+  if (offset < sizeof(lc->bank1_ram)) {
+    uint8_t *bank = NULL;
+    switch (lc->banked_memory_ram_select) {
+    case A2_LC_RAM1:
+      bank = lc->bank1_ram;
+      break;
+    case A2_LC_RAM2:
+      bank = lc->bank2_ram;
+      break;
+    default:
+      fprintf(stderr, "a2_language_card_write_visible: invalid banked_memory_ram_select %d\n", lc->banked_memory_ram_select);
+      return;
+    }
+
+    size_t bank_part = sizeof(lc->bank1_ram) - offset;
+    if (bank_part > size)
+      bank_part = size;
+    memcpy(bank + offset, data, bank_part);
+    offset += bank_part;
+    data += bank_part;
+    size -= bank_part;
+  }
+
+  if (size)
+    memcpy(lc->high_ram + (offset - sizeof(lc->bank1_ram)), data, size);
+  lc->visible_memory_dirty = true;
+}
+
 // Used to copy the program-visible language card state into a flat
 // ram buffer, used for dumping debug state.  
 void a2_language_card_sync_ram(a2_language_card_t *lc, uint8_t *ram) {

@@ -428,6 +428,9 @@ void a2_language_card_init(a2_language_card_t *lc);
 void a2_language_card_load_rom(a2_language_card_t *lc, const uint8_t *rom, uint16_t rom_size);
 uint8_t a2_language_card_peek(a2_language_card_t *lc, unsigned offset);
 void a2_language_card_poke(a2_language_card_t *lc, unsigned offset, uint8_t value);
+/// Write bytes to whichever language-card storage is currently visible to reads. Used for
+/// setting initial state of memory from .b33 file or similar source
+void a2_language_card_write_visible(a2_language_card_t *lc, unsigned offset, const uint8_t *data, size_t size);
 void a2_language_card_sync_ram(a2_language_card_t *lc, uint8_t *ram);
 void a2_language_card_decode_peek(a2_language_card_t *lc, uint16_t addr, uint16_t prev_addr);
 

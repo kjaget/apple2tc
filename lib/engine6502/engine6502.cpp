@@ -59,6 +59,23 @@ public:
     return ram_ + (pageIndex ? A2_HGR2SCRN : A2_HGR1SCRN);
   }
 
+  void loadVisibleMemory(uint16_t addr, const uint8_t *data, size_t size) {
+    while (size) {
+      if (addr < 0xD000) {
+        size_t chunk = (size_t)(0xD000u - addr);
+        if (chunk > size)
+          chunk = size;
+        memcpy(ram_ + addr, data, chunk);
+        addr = (uint16_t)(addr + chunk);
+        data += chunk;
+        size -= chunk;
+      } else {
+        io_write_upper_visible(addr, data, size);
+        return;
+      }
+    }
+  }
+
 protected:
   uint8_t ioPeek(uint16_t addr) override {
     return io_peek(addr);
@@ -127,7 +144,7 @@ std::optional<uint16_t> loadB33(const std::vector<uint8_t> &data) {
   if (data.size() > 4) {
     uint16_t start = data[0] + data[1] * 256;
     if (data.size() - 4 <= 0x10000u - start) {
-      memcpy(s_emu.getMainRAMWritable() + start, data.data() + 4, data.size() - 4);
+      s_emu.loadVisibleMemory(start, data.data() + 4, data.size() - 4);
       fprintf(stderr, "Loaded %zu bytes at $%04X (%u)\n", data.size() - 4, start, start);
       return start;
     }

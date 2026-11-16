@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -43,6 +44,10 @@ void io_load_rom(const uint8_t *rom, uint16_t size);
 /// Refresh the main flat RAM view from switched RAM/ROM and banked RAM 
 /// based on the settings of the language card soft switches.
 void io_refresh_main_ram_view(uint8_t *ram);
+
+/// Write bytes into the language-card area at $D000-$FFFF based on the
+/// current read mapping (ROM or selected RAM bank).
+void io_write_upper_visible(uint16_t addr, const uint8_t *data, size_t size);
 
 /// Called at each basic block when `g_debug` asks for it. See `a2engine.h`.
 void debug_asm(uint16_t pc);

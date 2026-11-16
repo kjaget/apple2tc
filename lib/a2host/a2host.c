@@ -399,6 +399,16 @@ void io_refresh_main_ram_view(uint8_t *ram) {
   a2_language_card_sync_ram(&io_.language_card, ram);
 }
 
+void io_write_upper_visible(uint16_t addr, const uint8_t *data, size_t size) {
+  if (addr < 0xD000 || size == 0)
+    return;
+
+  size_t max_size = 0x10000u - addr;
+  if (size > max_size)
+    size = max_size;
+  a2_language_card_write_visible(&io_.language_card, addr - 0xD000, data, size);
+}
+
 typedef struct {
   uint16_t addr;
   uint8_t size;

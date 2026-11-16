@@ -20,3 +20,4 @@ add_executable(apple2tc
   ir/IR.cpp ir/ValueList.h ir/IR.h ir/IRUtil.cpp ir/IRUtil.h
   ir/IRDump.cpp ir/IRDump.h
   )
+target_link_libraries(apple2tc PRIVATE a2io)
