@@ -468,17 +468,8 @@ private:
   void addMemRange(MemRange range);
   /// Return an iterator to the memory range containing the specified address.
   [[nodiscard]] std::vector<MemRange>::const_iterator findMemRange(uint16_t addr) const;
+  [[nodiscard]] std::vector<bool> codeCoverage() const;
 
-  AsmBlock *findAsmBlockContaining(uint16_t addr) {
-    auto it = asmBlocks_.upper_bound(addr);
-    // Check if the target overlaps the previous range.
-    if (it != asmBlocks_.begin()) {
-      --it;
-      if (it->second.addrInside(addr))
-        return &it->second;
-    }
-    return nullptr;
-  }
   AsmBlock *findAsmBlockAt(uint16_t addr) {
     auto it = asmBlocks_.find(addr);
     return it != asmBlocks_.end() ? &it->second : nullptr;

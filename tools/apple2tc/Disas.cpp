@@ -428,6 +428,8 @@ void Disas::run(bool noGenerations) {
   // TODO: identify and coalesce misaligned blocks which come back in sync after
   //       one instruction.
 
+  const auto covered = codeCoverage();
+
   // Collect all data labels.
   for (const auto &block : asmBlocks_) {
     for (auto [addr, inst] : block.second.instructions(this)) {
@@ -436,7 +438,7 @@ void Disas::run(bool noGenerations) {
         if (operandIsEA(inst.addrMode)) {
           // Check for self-modifying code.
           if (instWritesMemNormal(inst.kind, inst.addrMode)) {
-            if (findAsmBlockContaining(inst.operand)) {
+            if (covered[inst.operand]) {
               selfModifers_.insert(addr);
 
               auto smKind = operandIsIndexed(inst.addrMode) ? SelfModifiedKind::Indexed
@@ -461,17 +463,22 @@ void Disas::run(bool noGenerations) {
   printf("// data labels: %zu\n", dataLabels_.size());
 }
 
-void Disas::printCoverage(FILE *f, const std::vector<KnownDataRange> &knownData) {
-  // What the disassembler reached, not what survives into the generated C:
-  // this runs before IR generation, so passes that delete blocks later (see
-  // --extern-routines) are not reflected. It answers "how much of this binary
-  // has been classified as code", which is the number that bounds the work.
+std::vector<bool> Disas::codeCoverage() const {
   std::vector<bool> covered(0x10000, false);
   for (const auto &[addr, block] : asmBlocks_) {
     (void)addr;
     for (uint32_t a = block.addr(); a < block.endAddr() && a < 0x10000; ++a)
       covered[a] = true;
   }
+  return covered;
+}
+
+void Disas::printCoverage(FILE *f, const std::vector<KnownDataRange> &knownData) {
+  // What the disassembler reached, not what survives into the generated C:
+  // this runs before IR generation, so passes that delete blocks later (see
+  // --extern-routines) are not reflected. It answers "how much of this binary
+  // has been classified as code", which is the number that bounds the work.
+  const auto covered = codeCoverage();
 
   std::vector<bool> known(0x10000, false);
   for (const auto &kd : knownData)

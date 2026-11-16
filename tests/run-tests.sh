@@ -131,6 +131,28 @@ if ! grep -q 'StoreR8       STATUS_C, 0x00' codeat-noedges-test.ir; then
 fi
 rm codeat-test.ir codeat-noedges-test.ir
 
+# A misaligned block ending early must not hide code in an overlapping block.
+$a6502 selfmod-overlap.s selfmod-overlap.b33
+$apple2tc selfmod-overlap.b33 --simple-c -O3 > selfmod-overlap-test.c
+for inst in \
+  '/* $0342 STA */ poke(ram_peek16(0x0343) + s_y, s_a);' \
+  '/* $0352 STA */ poke(ram_peek16(0x0353) + s_y, s_a);' \
+  '/* $0360 STA */ poke(ram_peek16(0x0361) + s_y, s_a);' \
+  '/* $0363 STA */ poke(0x5678 + s_y, s_a);'; do
+  if ! grep -Fq "$inst" selfmod-overlap-test.c; then
+    echo "FAIL: missing expected self-modifying code output: $inst" >&2
+    exit 1
+  fi
+done
+$apple2tc selfmod-overlap.b33 --ir -O3 > selfmod-overlap-test.ir
+for addr in 0x0343 0x0353; do
+  if ! grep -Fq "RamPeek16un $addr" selfmod-overlap-test.ir; then
+    echo "FAIL: missing modified operand read in IR at $addr" >&2
+    exit 1
+  fi
+done
+rm selfmod-overlap-test.c selfmod-overlap-test.ir selfmod-overlap.b33
+
 # --inline-str: routines taking a NUL-terminated string after the JSR. Two
 # baselines again, and for the same reason -- without the option the tracer
 # follows the fall-through into the text, and $C8 $C9 $00 decodes as
