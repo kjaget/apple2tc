@@ -778,7 +778,7 @@ void run_emulated(unsigned run_cycles) {
   while (s_remaining_cycles > 0) {
     uint16_t tmp16;
     uint8_t tmp;
-    printf("PC: $%04X, cycles = %d\n", s_pc, s_cycles);
+    printf("PC: $%04X\n", s_pc);
     switch (s_pc) {
     case 0x0000: // [$0000..$0001]    2 bytes
       CYCLES(0x0000, 7);
@@ -1619,21 +1619,19 @@ void run_emulated(unsigned run_cycles) {
     case 0x0902: // [$0902..$0910]   15 bytes
       CYCLES(0x0902, 19);
       /* $0902 LDA */ s_a = update_nz(0x00);
-      printf("LDA at $0902: %02X\n", s_a);
       /* $0904 LDY */ s_y = update_nz(peek_zpg(0x45));
-      printf("LDY at $0904: %02X\n", s_y);
+      // WARNING: performs self modification.
       /* $0906 STA */ poke(0x09a0, s_a);
+      // WARNING: performs self modification.
       /* $0909 STY */ poke(0x09a1, s_y);
       /* $090C SEC */ s_status |= STATUS_C;
       /* $090D SBC */ tmp = 0x54, s_a = s_status & STATUS_D ? sbc_decimal(s_a, tmp) : update_nzv_inv_c(s_a - tmp - (~s_status & STATUS_C), s_a, ~tmp);
-      printf("SBC at $090D: %02X\n", s_a);
       /* $090F BCS */ s_pc = s_status & STATUS_C ? (s_cycles++, s_remaining_cycles--, 0x0913) : 0x0911;
       branchTarget = true;
       break;
     case 0x0911: // [$0911..$0911]    1 bytes
       CYCLES(0x0911, 2);
       /* $0911 DEY */ s_y = update_nz(s_y - 1);
-      printf("DEY at $0911: %02X\n", s_y);
       s_pc = 0x0912;
       break;
     case 0x0912: // [$0912..$0912]    1 bytes
@@ -1643,25 +1641,22 @@ void run_emulated(unsigned run_cycles) {
       break;
     case 0x0913: // [$0913..$0915]    3 bytes
       CYCLES(0x0913, 4);
+      // WARNING: performs self modification.
       /* $0913 STA */ poke(0x0988, s_a);
-      printf("STA at $0913: %02X, addr $0988\n", s_a);
       s_pc = 0x0916;
       break;
     case 0x0914: // [$0914..$0917]    4 bytes
       CYCLES(0x0914, 4);
       /* $0914 DEY */ s_y = update_nz(s_y - 1);
-      printf("DEY at $0914: %02X\n", s_y);
       /* $0915 ORA */ s_a = update_nz(s_a | 0x8c);
-      printf("ORA at $0915: %02X\n", s_a);
       /* $0917 ??? */ fprintf(stderr, "Warning: INVALID at $%04X\n", 0x0917);
                       error_handler(s_pc);
       break;
     case 0x0916: // [$0916..$091C]    7 bytes
       CYCLES(0x0916, 8);
+      // WARNING: performs self modification.
       /* $0916 STY */ poke(0x0989, s_y);
-      printf("STY at $0916: %02X, addr $0989\n", s_y);
       /* $0919 SBC */ tmp = 0x57, s_a = s_status & STATUS_D ? sbc_decimal(s_a, tmp) : update_nzv_inv_c(s_a - tmp - (~s_status & STATUS_C), s_a, ~tmp);
-      printf("SBC at $0919: %02X\n", s_a);
       /* $091B BCS */ s_pc = s_status & STATUS_C ? (s_cycles++, s_remaining_cycles--, 0x091e) : 0x091d;
       branchTarget = true;
       break;
@@ -1674,31 +1669,25 @@ void run_emulated(unsigned run_cycles) {
       CYCLES(0x091e, 10);
       // WARNING: performs self modification.
       /* $091E STA */ poke(0x0961, s_a);
-      printf("STA at $091E: %02X, addr $0961\n", s_a);
       // WARNING: performs self modification.
       /* $0921 STY */ poke(0x0962, s_y);
-      printf("STY at $0921: %02X, addr $0962\n", s_y);
       /* $0924 LDY */ s_y = update_nz(0x20);
-      printf("LDY at $0924: %02X\n", s_y);
       s_pc = 0x0926;
       break;
     case 0x0926: // [$0926..$0928]    3 bytes
       CYCLES(0x0926, 4);
       /* $0926 DEY */ s_y = update_nz(s_y - 1);
-      printf("DEY at $0926: %02X\n", s_y);
       /* $0927 BEQ */ s_pc = s_status & STATUS_Z ? (s_cycles++, s_remaining_cycles--, 0x0900) : 0x0929;
       branchTarget = true;
       break;
     case 0x0929: // [$0929..$092B]    3 bytes
       CYCLES(0x0929, 4);
       /* $0929 LDA */ s_a = update_nz(peek(0xc0ec));
-      printf("LDA at $0929: disk read : %02X\n", s_a);
       s_pc = 0x092c;
       break;
     case 0x092a: // [$092A..$092D]    4 bytes
       CYCLES(0x092a, 4);
       /* $092A CPX */ update_nz_inv_c(s_x - peek(0x10c0));
-      printf("CPX at $092A: disk read : %02X, x = %02X\n", peek(0x10c0), s_x);
       /* $092D ??? */ fprintf(stderr, "Warning: INVALID at $%04X\n", 0x092d);
                       error_handler(s_pc);
       break;
@@ -1710,7 +1699,6 @@ void run_emulated(unsigned run_cycles) {
     case 0x092e: // [$092E..$0931]    4 bytes
       CYCLES(0x092e, 4);
       /* $092E EOR */ s_a = update_nz(s_a ^ 0xd5);
-      printf("EOR at $092E: %02X\n", s_a);
       /* $0930 BNE */ s_pc = !(s_status & STATUS_Z) ? (s_cycles++, s_remaining_cycles--, 0x0926) : 0x0932;
       branchTarget = true;
       break;
@@ -1722,21 +1710,18 @@ void run_emulated(unsigned run_cycles) {
     case 0x0933: // [$0933..$0937]    5 bytes
       CYCLES(0x0933, 6);
       /* $0933 LDA */ s_a = update_nz(peek(0xc0ec));
-      printf("LDA at $0933: disk read : %02X\n", s_a);
       /* $0936 BPL */ s_pc = !(s_status & STATUS_N) ? (s_cycles++, s_remaining_cycles--, 0x0933) : 0x0938;
       branchTarget = true;
       break;
     case 0x0938: // [$0938..$093B]    4 bytes
       CYCLES(0x0938, 4);
       /* $0938 CMP */ update_nz_inv_c(s_a - 0xaa);
-      printf("CMP at $0938: %02X\n", s_a);
       /* $093A BNE */ s_pc = !(s_status & STATUS_Z) ? (s_cycles++, s_remaining_cycles--, 0x092e) : 0x093c;
       branchTarget = true;
       break;
     case 0x0939: // [$0939..$093B]    3 bytes
       CYCLES(0x0939, 4);
       /* $0939 TAX */ s_x = update_nz(s_a);
-      printf("TAX at $0939: x = %02X, a = %02X\n", s_x, s_a);
       /* $093A BNE */ s_pc = !(s_status & STATUS_Z) ? (s_cycles++, s_remaining_cycles--, 0x092e) : 0x093c;
       branchTarget = true;
       break;
@@ -1748,7 +1733,6 @@ void run_emulated(unsigned run_cycles) {
     case 0x093d: // [$093D..$093F]    3 bytes
       CYCLES(0x093d, 4);
       /* $093D LDA */ s_a = update_nz(peek(0xc0ec));
-      printf("LDA at $093D: disk read : %02X\n", s_a);
       s_pc = 0x0940;
       break;
     case 0x0940: // [$0940..$0941]    2 bytes
@@ -1759,54 +1743,43 @@ void run_emulated(unsigned run_cycles) {
     case 0x0942: // [$0942..$0945]    4 bytes
       CYCLES(0x0942, 4);
       /* $0942 CMP */ update_nz_inv_c(s_a - 0xad);
-      printf("CMP at $0942: %02X\n", s_a);
       /* $0944 BNE */ s_pc = !(s_status & STATUS_Z) ? (s_cycles++, s_remaining_cycles--, 0x092e) : 0x0946;
       branchTarget = true;
       break;
     case 0x0946: // [$0946..$0947]    2 bytes
       CYCLES(0x0946, 2);
       /* $0946 LDY */ s_y = update_nz(0xaa);
-      printf("LDY at $0946: %02X\n", s_y);
       s_pc = 0x0948;
       break;
     case 0x0948: // [$0948..$0949]    2 bytes
       CYCLES(0x0948, 2);
       /* $0948 LDA */ s_a = update_nz(0x00);
-      printf("LDA at $0948: %02X\n", s_a);
       s_pc = 0x094a;
       break;
     case 0x094a: // [$094A..$094B]    2 bytes
       CYCLES(0x094a, 3);
       /* $094A STA */ poke_zpg(0x26, s_a);
-      printf("STA at $094A: %02X, addr $26\n", s_a);
       s_pc = 0x094c;
       break;
     case 0x094b: // [$094B..$0950]    6 bytes
       CYCLES(0x094b, 9);
       /* $094B ROL */ tmp16 = 0xae, tmp = peek_zpg(tmp16), poke_zpg(tmp16, update_nz((tmp << 1) | (s_status & STATUS_C))), set_c_to_bit0(tmp >> 7);
-      printf("ROL at $094B: addr $AE = %02X\n", peek_zpg(0xae));
       /* $094D CPX */ update_nz_inv_c(s_x - peek(0x10c0));
-      printf("CPX at $094D: x = %02X, peek(0x10c0) = %02X\n", s_x, peek(0x10c0));
       /* $0950 ??? */ fprintf(stderr, "Warning: INVALID at $%04X\n", 0x0950);
                       error_handler(s_pc);
       break;
     case 0x094c: // [$094C..$0950]    5 bytes
       CYCLES(0x094c, 6);
       /* $094C LDX */ s_x = update_nz(peek(0xc0ec));
-      printf("LDX at $094C: x = %02X\n", s_x);
       /* $094F BPL */ s_pc = !(s_status & STATUS_N) ? (s_cycles++, s_remaining_cycles--, 0x094c) : 0x0951;
       branchTarget = true;
       break;
     case 0x0951: // [$0951..$0959]    9 bytes
       CYCLES(0x0951, 14);
       /* $0951 LDA */ s_a = update_nz(peek(0x0a00 + s_x));
-      printf("LDA at $0951: a = %02X, peek(%04x) = %02X\n", s_a, 0x0a00 + s_x, peek(0x0a00 + s_x));
       /* $0954 STA */ poke(0x0200 + s_y, s_a);
-      printf("STA at $0954: %02X, addr %04X\n", s_a, 0x0200 + s_y);
       /* $0957 EOR */ s_a = update_nz(s_a ^ peek_zpg(0x26));
-      printf("EOR at $0957: a = %02X, peek_zpg(0x26) = %02X\n", s_a, peek_zpg(0x26));
       /* $0959 INY */ s_y = update_nz(s_y + 1);
-      printf("INY at $0959: y = %02X\n", s_y);
       s_pc = 0x095a;
       break;
     case 0x095a: // [$095A..$095B]    2 bytes
@@ -1817,7 +1790,6 @@ void run_emulated(unsigned run_cycles) {
     case 0x095c: // [$095C..$095F]    4 bytes
       CYCLES(0x095c, 4);
       /* $095C LDY */ s_y = update_nz(0xaa);
-      printf("LDY at $095C: y = %02X\n", s_y);
       /* $095E BNE */ s_pc = !(s_status & STATUS_Z) ? (s_cycles++, s_remaining_cycles--, 0x0963) : 0x0960;
       branchTarget = true;
       break;
@@ -1826,13 +1798,11 @@ void run_emulated(unsigned run_cycles) {
       // WARNING: performs self modification.
       // WARNING: operand self modification.
       /* $0960 STA */ poke(ram_peek16(0x0961) + s_y, s_a);
-      printf("STA at $0960: %02X, addr %04X\n", s_a, ram_peek16(0x0961) + s_y);
       s_pc = 0x0963;
       break;
     case 0x0963: // [$0963..$0967]    5 bytes
       CYCLES(0x0963, 6);
       /* $0963 LDX */ s_x = update_nz(peek(0xc0ec));
-      printf("LDX at $0963: x = %02X\n", s_x);
       /* $0966 BPL */ s_pc = !(s_status & STATUS_N) ? (s_cycles++, s_remaining_cycles--, 0x0963) : 0x0968;
       branchTarget = true;
       break;
@@ -1860,43 +1830,34 @@ void run_emulated(unsigned run_cycles) {
     case 0x0974: // [$0974..$0978]    5 bytes
       CYCLES(0x0974, 7);
       /* $0974 PHA */ push8(s_a);
-      printf("PC: $0974, s_a: $%02X\n", s_a);
       /* $0975 AND */ s_a = update_nz(s_a & 0xfc);
-      printf("PC: $0975, s_a: $%02X\n", s_a);
       /* $0977 LDY */ s_y = update_nz(0xaa);
-      printf("PC: $0977, s_y: $%02X\n", s_y);
       s_pc = 0x0979;
       break;
     case 0x0979: // [$0979..$097D]    5 bytes
       CYCLES(0x0979, 6);
       /* $0979 LDX */ s_x = update_nz(peek(0xc0ec));
-      printf("PC: $0979, s_x: $%02X, addr = $%04X\n", s_x, 0xc0ec);
       /* $097C BPL */ s_pc = !(s_status & STATUS_N) ? (s_cycles++, s_remaining_cycles--, 0x0979) : 0x097e;
       branchTarget = true;
       break;
     case 0x097e: // [$097E..$0983]    6 bytes
       CYCLES(0x097e, 8);
       /* $097E EOR */ s_a = update_nz(s_a ^ peek(0x0a00 + s_x));
-      printf("PC: $097E, s_a: $%02X, addr = $%04X, data = $%02X\n", s_a, 0x0a00 + s_x, peek(0x0a00 + s_x));
       /* $0981 LDX */ s_x = update_nz(peek(0x0200 + s_y));
-      printf("PC: $0981, s_x: $%02X, addr = $%04X\n", s_x, 0x0200 + s_y);
       s_pc = 0x0984;
       break;
     case 0x0980: // [$0980..$0983]    4 bytes
       CYCLES(0x0980, 6);
       /* $0980 ASL */ s_a = update_nzc(s_a << 1);
-      printf("PC: $0980, s_a: $%02X\n", s_a);
       /* $0981 LDX */ s_x = update_nz(peek(0x0200 + s_y));
-      printf("PC: $0981, s_x: $%02X, addr = $%04X\n", s_x, 0x0200 + s_y);
       s_pc = 0x0984;
       break;
     case 0x0984: // [$0984..$0989]    6 bytes
       CYCLES(0x0984, 9);
       /* $0984 EOR */ s_a = update_nz(s_a ^ peek(0x0b01 + s_x));
-      printf("PC: $0984, s_a: $%02X, addr = $%04X\n", s_a, 0x0b01 + s_x);
       // WARNING: performs self modification.
-      /* $0987 STA */ poke(0xabac + s_y, s_a);
-      printf("STA at $0987: %02X, addr %04X\n", s_a, 0xabac + s_y);
+      // WARNING: operand self modification.
+      /* $0987 STA */ poke(ram_peek16(0x0988) + s_y, s_a);
       s_pc = 0x098a;
       break;
     case 0x0986: // [$0986..$0986]    1 bytes
@@ -1934,14 +1895,11 @@ void run_emulated(unsigned run_cycles) {
     case 0x0996: // [$0996..$09A1]   12 bytes
       CYCLES(0x0996, 17);
       /* $0996 EOR */ s_a = update_nz(s_a ^ peek(0x0a00 + s_x));
-      printf("EOR at $0996: a = %02X, peek(0x0a00 + s_x) = %02X\n", s_a, peek(0x0a00 + s_x));
       /* $0999 LDX */ s_x = update_nz(peek(0x01fe + s_y));
-      printf("LDX at $0999: x = %02X, peek(0x01fe + s_y) = %02X\n", s_x, peek(0x01fe + s_y));
       /* $099C EOR */ s_a = update_nz(s_a ^ peek(0x0b02 + s_x));
-      printf("EOR at $099C: a = %02X, peek(0x0b02 + s_x) = %02X\n", s_a, peek(0x0b02 + s_x));
       // WARNING: performs self modification.
-      /* $099F STA */ poke(0xac00 + s_y, s_a);
-      printf("STA at $099F: %02X, addr %04X\n", s_a, 0xac00 + s_y);
+      // WARNING: operand self modification.
+      /* $099F STA */ poke(ram_peek16(0x09a0) + s_y, s_a);
       s_pc = 0x09a2;
       break;
     case 0x099b: // [$099B..$099D]    3 bytes
@@ -2573,31 +2531,23 @@ void run_emulated(unsigned run_cycles) {
     case 0x0c05: // [$0C05..$0C10]   12 bytes
       CYCLES(0x0c05, 18);
       /* $0C05 LDA */ s_a = update_nz(peek(0x0c48 + s_y));
-      printf("LDA at $0C05: %02X, addr $%04X\n", s_a, 0x0c48 + s_y);
       /* $0C08 CLC */ s_status &= ~STATUS_C;
       /* $0C09 ADC */ tmp = peek_zpg(0x3e), s_a = s_status & STATUS_D ? adc_decimal(s_a, tmp) : update_nzvc(s_a + tmp + (s_status & STATUS_C), s_a, tmp);
-      printf("ADC at $0C09: %02X, peek(0x3e) %02X, s_a %02X\n", tmp, peek_zpg(0x3e), s_a);
       /* $0C0B STA */ poke(0x0c58 + s_y, s_a);
-      printf("STA at $0C0B: %02X, addr $%04X\n", s_a, 0x0c58 + s_y);
       /* $0C0E DEY */ s_y = update_nz(s_y - 1);
-      printf("DEY at $0C0E: %02X\n", s_y);
       /* $0C0F BPL */ s_pc = !(s_status & STATUS_N) ? (s_cycles++, s_remaining_cycles--, 0x0c05) : 0x0c11;
       branchTarget = true;
       break;
     case 0x0c11: // [$0C11..$0C16]    6 bytes
       CYCLES(0x0c11, 8);
       /* $0C11 LDX */ s_x = update_nz(peek_zpg(0x2b));
-      printf("LDX at $0C11: %02X, addr $%04X\n", s_x, 0x2b);
       /* $0C13 LDA */ s_a = update_nz(0x60);
-      printf("LDA at $0C13: %02X\n", s_a);
       /* $0C15 STA */ poke_zpg(0x40, s_a);
-      printf("STA at $0C15: %02X, addr $%04X\n", s_a, 0x40);
       s_pc = 0x0c17;
       break;
     case 0x0c17: // [$0C17..$0C1A]    4 bytes
       CYCLES(0x0c17, 7);
       /* $0C17 DEC */ tmp16 = 0x40, poke_zpg(tmp16, update_nz(peek_zpg(tmp16) - 1));
-      printf("DEC at $0C17: %02X, addr $%04X\n", peek_zpg(tmp16), tmp16);
       /* $0C19 BEQ */ s_pc = s_status & STATUS_Z ? (s_cycles++, s_remaining_cycles--, 0x0c44) : 0x0c1b;
       branchTarget = true;
       break;
@@ -2614,20 +2564,15 @@ void run_emulated(unsigned run_cycles) {
     case 0x0c20: // [$0C20..$0C26]    7 bytes
       CYCLES(0x0c20, 9);
       /* $0C20 LDY */ s_y = update_nz(peek_zpg(0x2d));
-      printf("LDY at $0C20: %02X, addr $%04X\n", s_y, 0x2d);
       /* $0C22 LDA */ s_a = update_nz(peek(0x0c58 + s_y));
-      printf("LDA at $0C22: %02X, addr $%04X\n", s_a, 0x0c58 + s_y);
       /* $0C25 BEQ */ s_pc = s_status & STATUS_Z ? (s_cycles++, s_remaining_cycles--, 0x0c17) : 0x0c27;
       branchTarget = true;
       break;
     case 0x0c27: // [$0C27..$0C2F]    9 bytes
       CYCLES(0x0c27, 14);
       /* $0C27 STA */ poke_zpg(0x45, s_a);
-      printf("STA at $0C27: %02X, addr $%04X\n", s_a, 0x45);
       /* $0C29 LDA */ s_a = update_nz(0x00);
-      printf("LDA at $0C29: %02X, addr $%04X\n", s_a, 0x0c58 + s_y);
       /* $0C2B STA */ poke_zpg(0x44, s_a);
-      printf("STA at $0C2B: %02X, addr $%04X\n", s_a, 0x44);
       /* $0C2D JSR */ push16(0x0c2f), s_pc = 0x0902;
       branchTarget = true;
       break;
@@ -7909,9 +7854,7 @@ void run_emulated(unsigned run_cycles) {
     case 0xa828: // [$A828..$A82C]    5 bytes
       CYCLES(0xa828, 6);
       /* $A828 INX */ s_x = update_nz(s_x + 1);
-      printf("PC: A828 INX s_x: $%02X\n", s_x);
       /* $A829 CPX */ update_nz_inv_c(s_x - 0xa0);
-      printf("PC: A829 CPX s_x: $%02X\n", s_x);
       /* $A82B BNE */ s_pc = !(s_status & STATUS_Z) ? (s_cycles++, s_remaining_cycles--, 0xa825) : 0xa82d;
       branchTarget = true;
       break;
@@ -7919,11 +7862,8 @@ void run_emulated(unsigned run_cycles) {
       CYCLES(0xa82d, 14);
       // WARNING: performs self modification.
       /* $A82D INC */ tmp16 = 0xa83f, poke(tmp16, update_nz(peek(tmp16) + 1));
-      printf("PC: A82D INC tmp16: $%04X, peek(tmp16) = $%02X\n", tmp16, peek(tmp16));
       /* $A830 LDA */ s_a = update_nz(peek(0xa83f));
-      printf("PC: A830 LDA s_a: $%02X\n", s_a);
       /* $A833 CMP */ update_nz_inv_c(s_a - 0x40);
-      printf("PC: A833 CMP s_a: $%02X\n", s_a);
       /* $A835 BNE */ s_pc = !(s_status & STATUS_Z) ? (s_cycles++, s_remaining_cycles--, 0xa819) : 0xa837;
       branchTarget = true;
       break;
@@ -7936,14 +7876,11 @@ void run_emulated(unsigned run_cycles) {
       CYCLES(0xa83a, 17);
       // WARNING: operand self modification.
       /* $A83A LDA */ s_a = update_nz(peek(ram_peek16(0xa83b)));
-      printf("PC: A83A s_a: $%02X\n", s_a);
       // WARNING: performs self modification.
       // WARNING: operand self modification.
       /* $A83D STA */ poke(ram_peek16(0xa83e) + s_x, s_a);
-      printf("PC: A83D s_a: $%02X, addr = $%04X\n", s_a, ram_peek16(0xa83e) + s_x);
       // WARNING: performs self modification.
       /* $A840 INC */ tmp16 = 0xa83b, poke(tmp16, update_nz(peek(tmp16) + 1));
-      printf("PC: A840 INC tmp16: $%04X, peek(tmp16) = $%02X\n", tmp16, peek(tmp16));
       /* $A843 BNE */ s_pc = !(s_status & STATUS_Z) ? (s_cycles++, s_remaining_cycles--, 0xa848) : 0xa845;
       branchTarget = true;
       break;
@@ -7955,14 +7892,12 @@ void run_emulated(unsigned run_cycles) {
       break;
     case 0xa848: // [$A848..$A848]    1 bytes
       CYCLES(0xa848, 6);
-      printf("PC: A848 RTS : SP = $%02X, next PC = $%04X\n", s_sp, peek16(STACK_PAGE_ADDR + s_sp + 1) + 1);
       /* $A848 RTS */ s_pc = pop16() + 1;
       branchTarget = true;
       break;
     case 0xa849: // [$A849..$A84D]    5 bytes
       CYCLES(0xa849, 8);
       /* $A849 LDX */ s_x = update_nz(0x30);
-      printf("PC: A849 LDX s_x: $%02X\n", s_x);
       /* $A84B JSR */ push16(0xa84d), s_pc = 0xaa35;
       branchTarget = true;
       break;
@@ -8288,31 +8223,22 @@ void run_emulated(unsigned run_cycles) {
     case 0xaa4c: // [$AA4C..$AA5F]   20 bytes
       CYCLES(0xaa4c, 25);
       /* $AA4C TAX */ s_x = update_nz(s_a);
-      printf("PC: $AA4C, s_a: $%02X\n", s_a);
       /* $AA4D LDA */ s_a = update_nz(peek(0xaa60 + s_x));
-      printf("PC: $AA4D, s_a: $%02X, addr = $%04X\n", s_a, 0xaa60 + s_x);
       /* $AA50 CLC */ s_status &= ~STATUS_C;
       /* $AA51 ADC */ tmp = 0x72, s_a = s_status & STATUS_D ? adc_decimal(s_a, tmp) : update_nzvc(s_a + tmp + (s_status & STATUS_C), s_a, tmp);
-      printf("PC: $AA51, s_a: $%02X, tmp = $%02X\n", s_a, tmp);
       // WARNING: performs self modification.
       /* $AA53 STA */ poke(0xaa5e, s_a);
-      printf("PC: $AA53, s_a: $%02X, addr = $%04X\n", s_a, 0xaa5e);
       /* $AA56 LDA */ s_a = update_nz(0xaa);
-      printf("PC: $AA56, s_a: $%02X\n", s_a);
       /* $AA58 ADC */ tmp = 0x00, s_a = s_status & STATUS_D ? adc_decimal(s_a, tmp) : update_nzvc(s_a + tmp + (s_status & STATUS_C), s_a, tmp);
-      printf("PC: $AA58, s_a: $%02X, tmp = $%02X\n", s_a, tmp);
       // WARNING: performs self modification.
       /* $AA5A STA */ poke(0xaa5f, s_a);
-      printf("PC: $AA5A, s_a: $%02X, addr = $%04X\n", s_a, 0xaa5f);
       // WARNING: operand self modification.
       /* $AA5D JMP */ s_pc = ram_peek16(0xaa5e);
-      printf("PC: $AA5D, JMP to $%04X\n", ram_peek16(0xaa5e));
       branchTarget = true;
       break;
     case 0xaa72: // [$AA72..$AA74]    3 bytes
       CYCLES(0xaa72, 6);
       /* $AA72 JSR */ push16(0xaa74), s_pc = 0xaa82;
-      printf("PC: $AA72, JSR to $AA82\n");
       branchTarget = true;
       break;
     case 0xaa75: // [$AA75..$AA81]   13 bytes
@@ -9982,34 +9908,27 @@ void run_emulated(unsigned run_cycles) {
     case 0xc68f: // [$C68F..$C693]    5 bytes
       CYCLES(0xc68f, 6);
       /* $C68F LDA */ s_a = update_nz(peek(0xc08c + s_x));
-      printf("PC: $C68F, s_a: $%02X, addr = $%04X, data = $%02X\n", s_a, 0xc08c + s_x, peek(0xc08c + s_x));
       /* $C692 BPL */ s_pc = !(s_status & STATUS_N) ? (s_cycles++, s_remaining_cycles--, 0xc68f) : 0xc694;
       branchTarget = true;
       break;
     case 0xc694: // [$C694..$C698]    5 bytes
       CYCLES(0xc694, 7);
       /* $C694 AND */ s_a = update_nz(s_a & peek_zpg(0x3c));
-      printf("PC: $C694, s_a: $%02X, addr = $%04X, data = $%02X\n", s_a, 0xc08c + s_x, peek(0xc08c + s_x));
       /* $C696 DEY */ s_y = update_nz(s_y - 1);
-      printf("PC: $C696, s_y: $%02X\n", s_y);
       /* $C697 BNE */ s_pc = !(s_status & STATUS_Z) ? (s_cycles++, s_remaining_cycles--, 0xc685) : 0xc699;
       branchTarget = true;
       break;
     case 0xc699: // [$C699..$C69D]    5 bytes
       CYCLES(0xc699, 9);
       /* $C699 PLP */ s_status = pop8() & ~STATUS_B;
-      printf("PC: $C699, s_status: $%02X\n", s_status);
       /* $C69A CMP */ update_nz_inv_c(s_a - peek_zpg(0x3d));
-      printf("PC: $C69A, s_a: $%02X, addr = $%04X, data = $%02X\n", s_a, 0x3d, peek_zpg(0x3d));
       /* $C69C BNE */ s_pc = !(s_status & STATUS_Z) ? (s_cycles++, s_remaining_cycles--, 0xc65c) : 0xc69e;
       branchTarget = true;
       break;
     case 0xc69e: // [$C69E..$C6A3]    6 bytes
       CYCLES(0xc69e, 8);
       /* $C69E LDA */ s_a = update_nz(peek_zpg(0x40));
-      printf("PC: $C69E, s_a: $%02X, addr = $%04X, data = $%02X\n", s_a, 0x40, peek_zpg(0x40));
       /* $C6A0 CMP */ update_nz_inv_c(s_a - peek_zpg(0x41));
-      printf("PC: $C6A0, s_a: $%02X, addr = $%04X, data = $%02X\n", s_a, 0x41, peek_zpg(0x41));
       /* $C6A2 BNE */ s_pc = !(s_status & STATUS_Z) ? (s_cycles++, s_remaining_cycles--, 0xc65c) : 0xc6a4;
       branchTarget = true;
       break;
@@ -10098,19 +10017,12 @@ void run_emulated(unsigned run_cycles) {
     case 0xc6dc: // [$C6DC..$C6EA]   15 bytes
       CYCLES(0xc6dc, 33);
       /* $C6DC LDA */ s_a = update_nz(peek(peek16_zpg(0x26) + s_y));
-      printf("LDA at $C6DC: %02X, addr $%04X\n", s_a, peek16_zpg(0x26) + s_y);
       /* $C6DE LSR */ tmp16 = 0x0300 + s_x, tmp = peek(tmp16), set_c_to_bit0(tmp), poke(tmp16, update_nz(tmp >> 1));
-      printf("LSR at $C6DE: %02X, addr $%04X\n", peek(tmp16), tmp16);
       /* $C6E1 ROL */ tmp = s_a, s_a = update_nz((tmp << 1) | (s_status & STATUS_C)), set_c_to_bit0(tmp >> 7);
-      printf("ROL at $C6E1: %02X\n", s_a);
       /* $C6E2 LSR */ tmp16 = 0x0300 + s_x, tmp = peek(tmp16), set_c_to_bit0(tmp), poke(tmp16, update_nz(tmp >> 1));
-      printf("LSR at $C6E2: %02X, addr $%04X\n", peek(tmp16), tmp16);
       /* $C6E5 ROL */ tmp = s_a, s_a = update_nz((tmp << 1) | (s_status & STATUS_C)), set_c_to_bit0(tmp >> 7);
-      printf("ROL at $C6E5: %02X\n", s_a);
       /* $C6E6 STA */ poke(peek16_zpg(0x26) + s_y, s_a);
-      printf("STA at $C6E6: %02X to address $%04X\n", s_a, peek16_zpg(0x26) + s_y);
       /* $C6E8 INY */ s_y = update_nz(s_y + 1);
-      printf("INY at $C6E8: %02X\n", s_y);
       /* $C6E9 BNE */ s_pc = !(s_status & STATUS_Z) ? (s_cycles++, s_remaining_cycles--, 0xc6d9) : 0xc6eb;
       branchTarget = true;
       break;
@@ -14083,7 +13995,8 @@ void run_emulated(unsigned run_cycles) {
       /* $E0A2 STY */ poke_zpg(0x9c, s_y);
       /* $E0A4 LDA */ s_a = update_nz(peek_zpg(0x6d));
       /* $E0A6 LDY */ s_y = update_nz(peek_zpg(0x6e));
-      /* $E0A8 STA */ poke_zpg(0x96, s_a);
+      // WARNING: operand self modification.
+      /* $E0A8 STA */ poke_zpg(ram_peek(0xe0a9), s_a);
       /* $E0AA STY */ poke_zpg(0x97, s_y);
       /* $E0AC CLC */ s_status &= ~STATUS_C;
       /* $E0AD ADC */ tmp = 0x07, s_a = s_status & STATUS_D ? adc_decimal(s_a, tmp) : update_nzvc(s_a + tmp + (s_status & STATUS_C), s_a, tmp);
@@ -19484,6 +19397,7 @@ void run_emulated(unsigned run_cycles) {
       break;
     case 0xef4b: // [$EF4B..$EF52]    8 bytes
       CYCLES(0xef4b, 14);
+      // WARNING: performs self modification.
       /* $EF4B INC */ tmp16 = 0xe0a9, poke(tmp16, update_nz(peek(tmp16) + 1));
       /* $EF4E LDY */ s_y = update_nz(0xee);
       /* $EF50 JSR */ push16(0xef52), s_pc = 0xef72;
