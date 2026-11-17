@@ -41,6 +41,14 @@ void io_poke(uint16_t addr, uint8_t value);
 /// io_load_rom loads a ROM into the high address space of the machine.
 void io_load_rom(const uint8_t *rom, uint16_t size);
 
+/// Read the currently visible language-card byte without accessing a soft switch.
+uint8_t io_peek_upper(uint16_t addr);
+
+/// Restore the language-card storage and mapping captured at collection start.
+/// The buffer contains bank 1, bank 2, high RAM and ROM, in that order.
+void io_restore_language_card(
+    const uint8_t *state, int read_rom, int bank, int write_protected, uint16_t prev_io_addr);
+
 /// Refresh the main flat RAM view from switched RAM/ROM and banked RAM 
 /// based on the settings of the language card soft switches.
 void io_refresh_main_ram_view(uint8_t *ram);

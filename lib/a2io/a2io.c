@@ -487,6 +487,8 @@ void a2_io_tick(a2_iostate_t *io, unsigned cycles) {
 }
 
 uint8_t a2_io_peek(a2_iostate_t *io, uint16_t addr, unsigned cycles) {
+  if (addr >= 0xC0E0 && addr <= 0xC0EF)
+    printf("[%u] DISK PEEK $%04X\n", cycles, addr);
   advance_clock(io, cycles);
 
   // Update this here rather than at the end of the function because

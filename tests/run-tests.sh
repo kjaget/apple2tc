@@ -153,6 +153,187 @@ for addr in 0x0343 0x0353; do
 done
 rm selfmod-overlap-test.c selfmod-overlap-test.ir selfmod-overlap.b33
 
+# Generate and execute language-card code with differing opcodes at the same PC.
+$a6502 language-card.s language-card.b33
+$apple2tc language-card.b33 --simple-c --language-card --run-data=language-card.json \
+  > language-card-generated.c
+python3 - <<'PY'
+import re
+with open("language-card-generated.c") as f:
+    code = f.read()
+block = re.search(r'    case 0xd000:[^\n]*\n(.*?)(?=    case |    default:)', code, re.S)
+assert block and all(f'/* ${pc} ' in block[1] for pc in ("D000", "D002", "D005"))
+assert 'CYCLES(0xd000, 12);' in block[1]
+assert 'case 0xd002:' not in code
+PY
+cc -std=c11 -I../include -I. -c language-card-driver.c -o language-card-driver.o
+c++ language-card-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
+  -o language-card-test
+./language-card-test
+./language-card-test changed-main-opcode
+printf '$D005 $D002\n' > language-card-code-at.txt
+$apple2tc language-card.b33 --simple-c --language-card --run-data=language-card.json \
+  --code-at=language-card-code-at.txt > language-card-code-at.c
+grep -q 'case 0xd002:' language-card-code-at.c
+if ./language-card-test unknown-address >language-card-error.out 2>&1; then
+  echo "FAIL: accepted unrecorded upper-memory address" >&2
+  exit 1
+fi
+grep -q 'Unknown code address:' language-card-error.out
+if grep -q 'Unsupported changed opcode\|switch (peek(0x\|(void)peek(0x' \
+    language-card-generated.c; then
+  echo "FAIL: generated code reads opcodes at runtime" >&2
+  exit 1
+fi
+printf 'CALL 768\n' > language-card-keys.txt
+$a2run language-card.b33 --preload --collect --from-rom --frames=150 \
+  --kbd-file=language-card-keys.txt --out=language-card-first.json \
+  >language-card-collect.out 2>&1
+python3 - <<'PY'
+import json
+
+with open("language-card-first.json") as f:
+    recording = json.load(f)
+assert [entry for entry in recording["UpperOpcodes"] if entry[0] == 0xD000] == [
+    [0xD000, 0xA9], [0xD000, 0xA2]
+]
+assert any(segment["addr"] == 0xD000 and segment["bytes"][0] == 0xA2
+           for generation in recording["generations"] for segment in generation["code"])
+assert 0x39B in recording["BranchTargets"], "RTI continuation must be recorded"
+assert 0x39B in recording["Branches"][str(0xE005)]
+assert 0xE000 in recording["Branches"][str(0x399)]
+PY
+
+# Round-trip the collector's startup state, including both banks and the
+# consecutive-switch latch, through the generator and the real host.
+$a2run language-card.b33 --preload --collect --from-rom --frames=2 --out=language-card-collected.json \
+  >language-card-collect.out 2>&1
+python3 - <<'PY'
+import json
+
+with open("language-card-collected.json") as f:
+    recording = json.load(f)
+assert recording["UpperOpcodes"]
+state = recording["LanguageCardStart"]
+assert [len(state[k]) for k in ("bank1", "bank2", "high", "rom", "mainRAM")] == [
+    0x1000, 0x1000, 0x2000, 0x3000, 0xC000
+]
+state["bank1"][0x123], state["bank2"][0x123], state["high"][0x1123] = 0x71, 0x72, 0x73
+state["mainRAM"][0x207] = 0x74
+state["rom"][0x1234] = 0x75
+state.update(readRom=False, bank=1, writeProtected=True, prevIOAddr=0xC081)
+with open("language-card.json") as f:
+    fixture = json.load(f)
+fixture["BranchTargets"] = [0xD002]
+with open("language-card-entry.json", "w") as f:
+    json.dump(fixture, f)
+fixture["BranchTargets"] = [0xD104]
+fixture["UpperOpcodes"].extend([[0xD100, 0xD0], [0xD102, 0xA9], [0xD104, 0x60]])
+with open("language-card-branch.json", "w") as f:
+    json.dump(fixture, f)
+fixture["UpperOpcodes"] = fixture["UpperOpcodes"][:-3]
+fixture["BranchTargets"] = [0xD100]
+fixture["UpperOpcodes"].append([0xFFFF, 0xA9])
+with open("language-card-wrap.json", "w") as f:
+    json.dump(fixture, f)
+fixture["UpperOpcodes"].pop()
+fixture["BranchTargets"] = []
+fixture["UpperOpcodes"].extend([[0xD200, 0xA9], [0xD201, 0xEA], [0xD202, 0x60]])
+with open("language-card-join.json", "w") as f:
+    json.dump(fixture, f)
+fixture["UpperOpcodes"] = fixture["UpperOpcodes"][:-3]
+fixture["BranchTargets"] = []
+fixture["LanguageCardStart"] = state
+with open("language-card-snapshot.json", "w") as f:
+    json.dump(fixture, f)
+state["mainRAM"][0x300] ^= 1
+with open("language-card-mismatch.json", "w") as f:
+    json.dump(fixture, f)
+state["mainRAM"][0x300] ^= 1
+state["bank1"][0] = 256
+with open("language-card-malformed.json", "w") as f:
+    json.dump(fixture, f)
+del fixture["LanguageCardStart"]
+with open("language-card-old.json", "w") as f:
+    json.dump(fixture, f)
+fixture["LanguageCardStart"] = "power-on"
+fixture["BranchTargets"] = [0x3fff]
+regs = dict(pc=0x300, a=0, x=0, y=0, sp=0xff, status=0x20)
+fixture["generations"] = [
+    dict(regs=regs, code=[dict(addr=0x4000, bytes=[0x60])]),
+    dict(regs=regs, code=[dict(addr=0x3fff, bytes=[0x60, 0x60])]),
+]
+with open("language-card-overlap.json", "w") as f:
+    json.dump(fixture, f)
+fixture["BranchTargets"] = [0xcffe]
+fixture["generations"] = [dict(regs=regs, code=[dict(addr=0xcffe, bytes=[0xad, 0x00])])]
+with open("language-card-boundary.json", "w") as f:
+    json.dump(fixture, f)
+PY
+if $apple2tc language-card.b33 --simple-c --language-card --run-data=language-card-old.json \
+    >language-card-error.out 2>&1; then
+  echo "FAIL: accepted a recording without language-card startup state" >&2
+  exit 1
+fi
+grep -q 'LanguageCardStart' language-card-error.out
+for what in mismatch malformed; do
+  if $apple2tc language-card.b33 --simple-c --language-card \
+      --run-data="language-card-$what.json" >language-card-error.out 2>&1; then
+    echo "FAIL: accepted $what starting state" >&2
+    exit 1
+  fi
+done
+if $apple2tc language-card.b33 --simple-c --language-card \
+    --run-data=language-card-boundary.json >language-card-error.out 2>&1; then
+  echo "FAIL: accepted an instruction crossing the language-card boundary" >&2
+  exit 1
+fi
+grep -q 'instruction crossing' language-card-error.out
+$apple2tc language-card.b33 --simple-c --language-card --run-data=language-card-overlap.json \
+  > language-card-overlap.c
+grep -q 'case 0x3fff:' language-card-overlap.c
+grep -q '/\* \$3FFF RTS \*/' language-card-overlap.c
+$apple2tc language-card.b33 --simple-c --language-card --run-data=language-card-entry.json \
+  > language-card-generated.c
+grep -q 'case 0xd002:' language-card-generated.c
+cc -std=c11 -I../include -I. -c language-card-driver.c -o language-card-driver.o
+c++ language-card-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
+  -o language-card-test
+./language-card-test branch-entry
+$apple2tc language-card.b33 --simple-c --language-card --run-data=language-card-branch.json \
+  > language-card-generated.c
+cc -std=c11 -I../include -I. -c language-card-driver.c -o language-card-driver.o
+c++ language-card-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
+  -o language-card-test
+./language-card-test conditional-branch
+$apple2tc language-card.b33 --simple-c --language-card --run-data=language-card-join.json \
+  > language-card-generated.c
+grep -q 'case 0xd202:' language-card-generated.c
+$apple2tc language-card.b33 --simple-c --language-card --run-data=language-card-wrap.json \
+  > language-card-generated.c
+if grep -q 'case 0xd100:' language-card-generated.c; then
+  echo "FAIL: emitted unrecorded upper-memory target" >&2
+  exit 1
+fi
+cc -std=c11 -I../include -I. -c language-card-driver.c -o language-card-driver.o
+c++ language-card-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
+  -o language-card-test
+./language-card-test wrap
+$apple2tc language-card.b33 --simple-c --language-card --run-data=language-card-snapshot.json \
+  > language-card-generated.c
+cc -std=c11 -DTEST_LC_RESTORE -I../include -I. -c language-card-driver.c -o language-card-driver.o
+c++ language-card-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
+  -o language-card-test
+./language-card-test
+"$bin/tests/a2io/language-card-generated-test"
+rm language-card.b33 language-card-generated.c language-card-driver.o language-card-test \
+  language-card-error.out language-card-collect.out language-card-collected.json \
+  language-card-snapshot.json language-card-old.json language-card-mismatch.json \
+  language-card-malformed.json language-card-overlap.json language-card-overlap.c \
+  language-card-boundary.json language-card-keys.txt language-card-first.json \
+  language-card-entry.json language-card-branch.json language-card-join.json \
+  language-card-wrap.json language-card-code-at.txt language-card-code-at.c
+
 # --inline-str: routines taking a NUL-terminated string after the JSR. Two
 # baselines again, and for the same reason -- without the option the tracer
 # follows the fall-through into the text, and $C8 $C9 $00 decodes as

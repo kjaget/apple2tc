@@ -11,18 +11,44 @@
 #include "Disas.h"
 
 #include "apple2tc/apple2iodefs.h"
+#include "apple2tc/apple2plus_rom.h"
 
 void Disas::printSimpleCPrologue(FILE *f) {
+  if (languageCard_)
+    fprintf(f, "\n#define APPLE2TC_LANGUAGE_CARD\n");
   fprintf(f, "\n#include \"apple2tc/system-inc.h\"\n\n");
 
+  if (languageCard_) {
+    if (runData_->languageCardStart->powerOn)
+      fprintf(f, "static const uint8_t s_language_card_rom[0x3000];\n");
+    else {
+      fprintf(f, "static const uint8_t s_language_card_state[0x7000];\n");
+      fprintf(f, "static const uint8_t s_initial_ram[0xc000];\n");
+    }
+  }
   for (auto const &mr : memRanges_) {
+    if (languageCard_ && !runData_->languageCardStart->powerOn)
+      continue;
     unsigned len = mr.to - mr.from + 1;
     fprintf(f, "static const uint8_t s_mem_%04x[0x%04x];\n", mr.from, len);
   }
 
   fprintf(f, "\nvoid init_emulated(void) {\n");
+  if (languageCard_) {
+    const auto &start = *runData_->languageCardStart;
+    if (start.powerOn)
+      fprintf(f, "  io_load_rom(s_language_card_rom, 0x3000);\n");
+    else
+      fprintf(f, "  io_restore_language_card(s_language_card_state, %u, %u, %u, 0x%04x);\n",
+              (unsigned)start.readRom, start.bank, (unsigned)start.writeProtected, start.prevIOAddr);
+    if (!start.powerOn)
+      fprintf(f, "  memcpy(s_ram, s_initial_ram, 0xc000);\n");
+  }
   for (auto const &mr : memRanges_) {
     unsigned len = mr.to - mr.from + 1;
+    if (languageCard_ &&
+        (!runData_->languageCardStart->powerOn || mr.from >= 0xD000))
+      continue;
     fprintf(f, "  memcpy(s_ram + 0x%04x, s_mem_%04x, 0x%04x);\n", mr.from, mr.from, len);
   }
 
@@ -43,7 +69,41 @@ void Disas::printSimpleCPrologue(FILE *f) {
 }
 
 void Disas::printSimpleCEpilogue(FILE *f) {
+  if (languageCard_ && runData_->languageCardStart->powerOn) {
+    fprintf(f, "static const uint8_t s_language_card_rom[0x3000] = {");
+    const uint8_t *rom = apple2plus_rom;
+    for (const auto &mr : memRanges_)
+      if (!mr.writable && mr.from >= 0xD000 && mr.to == 0xFFFF)
+        rom = memory_ + 0xD000;
+    for (unsigned i = 0; i != 0x3000; ++i) {
+      if (i % 16 == 0)
+        fprintf(f, "\n  ");
+      fprintf(f, "0x%02X%s", rom[i], i == 0x2FFF ? "" : ", ");
+    }
+    fprintf(f, "\n};\n");
+  } else if (languageCard_) {
+    const auto &start = *runData_->languageCardStart;
+    fprintf(f, "static const uint8_t s_language_card_state[0x7000] = {");
+    unsigned i = 0;
+    for (const auto *bytes : {&start.bank1, &start.bank2, &start.high, &start.rom}) {
+      for (uint8_t byte : *bytes) {
+        if (i % 16 == 0)
+          fprintf(f, "\n  ");
+        fprintf(f, "0x%02X%s", byte, ++i == 0x7000 ? "" : ", ");
+      }
+    }
+    fprintf(f, "\n};\n");
+    fprintf(f, "static const uint8_t s_initial_ram[0xc000] = {");
+    for (unsigned j = 0; j != start.mainRAM.size(); ++j) {
+      if (j % 16 == 0)
+        fprintf(f, "\n  ");
+      fprintf(f, "0x%02X%s", start.mainRAM[j], j + 1 == start.mainRAM.size() ? "" : ", ");
+    }
+    fprintf(f, "\n};\n");
+  }
   for (auto const &mr : memRanges_) {
+    if (languageCard_ && !runData_->languageCardStart->powerOn)
+      continue;
     unsigned len = mr.to - mr.from + 1;
     fprintf(f, "static const uint8_t s_mem_%04x[0x%04x] = {", mr.from, len);
     for (unsigned i = 0; i != len; ++i) {
@@ -75,6 +135,8 @@ void Disas::printSimpleC(FILE *f) {
   for (auto it = asmBlocks_.begin(), end = asmBlocks_.end(); it != end;) {
     const AsmBlock &block = it->second;
     ++it;
+    if (languageCard_ && block.addr() >= 0xD000 && !recordedUpper(block.addr()))
+      continue;
     const AsmBlock *nextBlock = it != end ? &it->second : nullptr;
     printSimpleCRange(f, block, nextBlock);
   }
@@ -102,20 +164,23 @@ void Disas::printSimpleCRange(FILE *f, const AsmBlock &block, const AsmBlock * /
 
   bool fall = false;
   for (const auto [addr, inst] : block.instructions(this))
-    fall = printSimpleCInst(f, addr, inst);
+    fall = printSimpleCInst(f, addr, inst, languageCard_ && addr >= 0xD000);
 
   if (fall) {
     const AsmBlock *fallBlock = block.getFallBlock();
-    assert(fallBlock && "we fell, so there must be a fall block");
+    assert((fallBlock || (languageCard_ && block.endAddr() >= 0x10000)) &&
+           "we fell, so there must be a fall block");
     // Always break, so we can track cycles reproducibly.
-    fprintf(f, "      s_pc = 0x%04x;\n", fallBlock->addr());
+    fprintf(f, "      s_pc = 0x%04x;\n",
+            fallBlock ? fallBlock->addr() : (uint16_t)block.endAddr());
     fprintf(f, "      break;\n");
   }
 }
 
-bool Disas::printSimpleCInst(FILE *f, uint16_t pc, CPUInst inst) {
+bool Disas::printSimpleCInst(FILE *f, uint16_t pc, CPUInst inst, bool dynamicOperand) {
   bool fall = true;
-  scSelfModOperand_ = false;
+  scSelfModOperand_ = dynamicOperand;
+  scDynamicOperand_ = dynamicOperand;
   scPC_ = pc;
 
   if (selfModifers_.count(pc))
@@ -264,7 +329,10 @@ bool Disas::printSimpleCInst(FILE *f, uint16_t pc, CPUInst inst) {
         pc);
     fprintf(f, "%21s push16(0x%04x);\n", "", (uint16_t)(pc + 2));
     fprintf(f, "%21s push8(s_status | STATUS_B);\n", "");
-    fprintf(f, "%21s s_pc = 0x%04x;\n", "", peek16(A2_IRQ_VEC));
+    if (languageCard_)
+      fprintf(f, "%21s s_pc = peek16(0xfffe);\n", "");
+    else
+      fprintf(f, "%21s s_pc = 0x%04x;\n", "", peek16(A2_IRQ_VEC));
     fprintf(f, "      branchTarget = true;\n");
     fprintf(f, "      break;");
     fall = false;
@@ -486,7 +554,6 @@ bool Disas::printSimpleCInst(FILE *f, uint16_t pc, CPUInst inst) {
 }
 
 std::string Disas::simpleCRead(CPUInst inst) const {
-  char buf[32];
   switch (inst.addrMode) {
   case CPUAddrMode::A:
   case CPUAddrMode::Imm:
@@ -501,14 +568,12 @@ std::string Disas::simpleCRead(CPUInst inst) const {
   case CPUAddrMode::Ind:
   case CPUAddrMode::X_Ind:
   case CPUAddrMode::Ind_Y:
-    snprintf(buf, sizeof(buf), "peek(%s)", simpleCAddr(inst).c_str());
-    return buf;
+    return "peek(" + simpleCAddr(inst) + ")";
 
   case CPUAddrMode::Zpg:
   case CPUAddrMode::Zpg_X:
   case CPUAddrMode::Zpg_Y:
-    snprintf(buf, sizeof(buf), "peek_zpg(%s)", simpleCAddr(inst).c_str());
-    return buf;
+    return "peek_zpg(" + simpleCAddr(inst) + ")";
 
   case CPUAddrMode::_last:
   case CPUAddrMode::_invalid:
@@ -579,6 +644,8 @@ const char *Disas::simpleCWriteOp(CPUInst inst) {
 
 std::string Disas::simpleCAddr(CPUInst inst) const {
   char buf[64];
+  const char *read8 = scDynamicOperand_ ? "peek" : "ram_peek";
+  const char *read16 = scDynamicOperand_ ? "peek16" : "ram_peek16";
   if (!scSelfModOperand_) {
     switch (inst.addrMode) {
     case CPUAddrMode::A:
@@ -628,44 +695,45 @@ std::string Disas::simpleCAddr(CPUInst inst) const {
     case CPUAddrMode::A:
       return "s_a";
     case CPUAddrMode::Abs:
-      snprintf(buf, sizeof(buf), "ram_peek16(0x%04x)", scPC_ + 1);
+      snprintf(buf, sizeof(buf), "%s(0x%04x)", read16, (uint16_t)(scPC_ + 1));
       break;
     case CPUAddrMode::Abs_X:
-      snprintf(buf, sizeof(buf), "ram_peek16(0x%04x) + s_x", scPC_ + 1);
+      snprintf(buf, sizeof(buf), "%s(0x%04x) + s_x", read16, (uint16_t)(scPC_ + 1));
       break;
     case CPUAddrMode::Abs_Y:
-      snprintf(buf, sizeof(buf), "ram_peek16(0x%04x) + s_y", scPC_ + 1);
+      snprintf(buf, sizeof(buf), "%s(0x%04x) + s_y", read16, (uint16_t)(scPC_ + 1));
       break;
     case CPUAddrMode::Imm:
-      snprintf(buf, sizeof(buf), "ram_peek(0x%04x)", scPC_ + 1);
+      snprintf(buf, sizeof(buf), "%s(0x%04x)", read8, (uint16_t)(scPC_ + 1));
       break;
     case CPUAddrMode::Implied:
       return "";
     case CPUAddrMode::Ind:
-      snprintf(buf, sizeof(buf), "peek16(ram_peek16(0x%04x))", scPC_ + 1);
+      snprintf(buf, sizeof(buf), "peek16(%s(0x%04x))", read16, (uint16_t)(scPC_ + 1));
       break;
     case CPUAddrMode::X_Ind:
-      snprintf(buf, sizeof(buf), "peek16_zpg(ram_peek(0x%04x) + s_x)", scPC_ + 1);
+      snprintf(buf, sizeof(buf), "peek16_zpg(%s(0x%04x) + s_x)", read8, (uint16_t)(scPC_ + 1));
       break;
     case CPUAddrMode::Ind_Y:
-      snprintf(buf, sizeof(buf), "peek16_zpg(ram_peek(0x%04x)) + s_y", scPC_ + 1);
+      snprintf(buf, sizeof(buf), "peek16_zpg(%s(0x%04x)) + s_y", read8, (uint16_t)(scPC_ + 1));
       break;
     case CPUAddrMode::Rel:
       snprintf(
           buf,
           sizeof(buf),
-          "(uint16_t)(0x%04x + (int8_t)ram_peek(0x%04x))",
+          "(uint16_t)(0x%04x + (int8_t)%s(0x%04x))",
           (uint16_t)(scPC_ + 2),
-          scPC_ + 1);
+          read8,
+          (uint16_t)(scPC_ + 1));
       break;
     case CPUAddrMode::Zpg:
-      snprintf(buf, sizeof(buf), "ram_peek(0x%04x)", scPC_ + 1);
+      snprintf(buf, sizeof(buf), "%s(0x%04x)", read8, (uint16_t)(scPC_ + 1));
       break;
     case CPUAddrMode::Zpg_X:
-      snprintf(buf, sizeof(buf), "(uint8_t)(ram_peek(0x%04x) + s_x)", scPC_ + 1);
+      snprintf(buf, sizeof(buf), "(uint8_t)(%s(0x%04x) + s_x)", read8, (uint16_t)(scPC_ + 1));
       break;
     case CPUAddrMode::Zpg_Y:
-      snprintf(buf, sizeof(buf), "(uint8_t)(ram_peek(0x%04x) + s_y)", scPC_ + 1);
+      snprintf(buf, sizeof(buf), "(uint8_t)(%s(0x%04x) + s_y)", read8, (uint16_t)(scPC_ + 1));
       break;
     case CPUAddrMode::_last:
     case CPUAddrMode::_invalid:

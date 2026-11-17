@@ -220,6 +220,7 @@ static bool is_motor_spinning(const a2_disk2_t *disk, unsigned cycles) {
 /// 1,023,000 / (6250 * 5) ≈ 32.7 cycles/byte.
 #define DISK2_CYCLES_PER_NIBBLE 32
 
+#include <stdio.h>
 /// Read the data register, advancing disk position based on elapsed cycles.
 /// On real hardware, the shift register clocks in bits at the disk rotation
 /// rate. A new byte is available every ~32 CPU cycles. Between bytes, the
@@ -240,7 +241,7 @@ static uint8_t read_nibble(a2_disk2_t *disk, unsigned cycles) {
     uint8_t *track_base = drv->nib_data + drv->current_track * DISK2_NIB_TRACK_SIZE;
     disk->data_register = track_base[drv->position];
 
-    // printf("read_nibble : track %d, pos %d, byte 0x%02X\n", drv->current_track, drv->position, disk->data_register);
+    printf("read_nibble : track %d, pos %d, byte 0x%02X\n", drv->current_track, drv->position, disk->data_register);
     return disk->data_register;
   }
 

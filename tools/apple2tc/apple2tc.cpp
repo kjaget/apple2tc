@@ -58,6 +58,7 @@ static void printHelp() {
   fprintf(stderr, "  --rom               Input file is a ROM\n");
   fprintf(stderr, "  --asm               Generate asm listing (default)\n");
   fprintf(stderr, "  --simple-c          Generate simple C code\n");
+  fprintf(stderr, "  --language-card     Generate bank-aware simple C (requires a new recording)\n");
   fprintf(stderr, "  --ir                Generate IR\n");
   fprintf(stderr, "  --irc1              Generate C1 representation of the IR\n");
   fprintf(stderr, "  --dump-reg-liveness Dump per-function CPU register liveness\n");
@@ -86,6 +87,7 @@ int main(int argc, char **argv) {
     DumpRegLiveness,
   };
   bool noGenerations = false;
+  bool languageCard = false;
   bool preserveRetAddr = false;
   bool altExits = false;
   bool pruneReturns = false;
@@ -119,6 +121,10 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[i], "--simple-c") == 0) {
       action = Action::GenSimpleC;
+      continue;
+    }
+    if (strcmp(argv[i], "--language-card") == 0) {
+      languageCard = true;
       continue;
     }
     if (strcmp(argv[i], "--ir") == 0) {
@@ -195,6 +201,15 @@ int main(int argc, char **argv) {
       continue;
     }
 
+    if (languageCard && action != Action::GenSimpleC) {
+      fprintf(stderr, "--language-card requires --simple-c\n");
+      return 2;
+    }
+    if (languageCard && !coveragePath.empty()) {
+      fprintf(stderr, "--coverage is not supported with --language-card\n");
+      return 2;
+    }
+
     fprintf(stderr, "Too many arguments\n");
     printHelp();
     return 1;
@@ -211,6 +226,7 @@ int main(int argc, char **argv) {
 
   try {
     auto dis = std::make_shared<Disas>(runDataPath);
+    dis->setLanguageCard(languageCard);
     if (!codeAtPath.empty())
       dis->setCodeAt(loadCodeAt(codeAtPath));
     if (!inlineStrPath.empty()) {

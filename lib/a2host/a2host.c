@@ -395,6 +395,29 @@ void io_load_rom(const uint8_t *rom, uint16_t size) {
   a2_language_card_load_rom(&io_.language_card, rom, size);
 }
 
+uint8_t io_peek_upper(uint16_t addr) {
+  assert(addr >= 0xD000);
+  return a2_language_card_peek(&io_.language_card, addr - 0xD000);
+}
+
+void io_restore_language_card(
+    const uint8_t *state, int read_rom, int bank, int write_protected, uint16_t prev_io_addr) {
+  assert(bank == 1 || bank == 2);
+  a2_language_card_t *lc = &io_.language_card;
+  memcpy(lc->bank1_ram, state, sizeof(lc->bank1_ram));
+  state += sizeof(lc->bank1_ram);
+  memcpy(lc->bank2_ram, state, sizeof(lc->bank2_ram));
+  state += sizeof(lc->bank2_ram);
+  memcpy(lc->high_ram, state, sizeof(lc->high_ram));
+  state += sizeof(lc->high_ram);
+  memcpy(lc->rom, state, sizeof(lc->rom));
+  lc->banked_memory_read_rom = read_rom != 0;
+  lc->banked_memory_ram_select = bank == 1 ? A2_LC_RAM1 : A2_LC_RAM2;
+  lc->banked_memory_write_protect = write_protected != 0;
+  lc->visible_memory_dirty = true;
+  io_.prev_io_addr = prev_io_addr;
+}
+
 void io_refresh_main_ram_view(uint8_t *ram) {
   a2_language_card_sync_ram(&io_.language_card, ram);
 }

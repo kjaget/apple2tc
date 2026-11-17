@@ -284,6 +284,14 @@ struct RuntimeData {
     std::vector<Segment> code{};
     Generation(){};
   };
+  struct LanguageCardStart {
+    bool powerOn = false;
+    std::vector<uint8_t> bank1, bank2, high, rom, mainRAM;
+    bool readRom = true;
+    unsigned bank = 2;
+    bool writeProtected = true;
+    uint16_t prevIOAddr = 0;
+  };
 
   /// Statistics.
   std::unique_ptr<BaseStats> baseStats{};
@@ -291,6 +299,9 @@ struct RuntimeData {
   std::vector<uint16_t> branchTargets;
   /// All branches indexed by address of the origin.
   std::unordered_map<uint16_t, std::vector<uint16_t>> allBranches{};
+  /// Opcode variants observed at instruction addresses in $D000-$FFFF.
+  std::optional<std::map<uint16_t, uint8_t>> upperOpcodes{};
+  std::optional<LanguageCardStart> languageCardStart{};
   /// All executable generations.
   std::vector<Generation> generations;
 
@@ -394,6 +405,10 @@ public:
     codeAt_ = std::move(edges);
   }
 
+  void setLanguageCard(bool enabled) {
+    languageCard_ = enabled;
+  }
+
   /// Record the inline-string routines declared with `--inline-str`.
   void setInlineStr(std::vector<uint16_t> addrs) {
     inlineStr_ = std::set<uint16_t>(addrs.begin(), addrs.end());
@@ -450,6 +465,7 @@ public:
   ThreeBytes peek3(uint16_t addr) const {
     return {{peek(addr), peek(addr + 1), peek(addr + 2)}};
   }
+  CPUInst decodeCode(uint16_t addr) const;
 
   /// Return a view of the memory ranges.
   auto memRanges() {
@@ -487,6 +503,7 @@ private:
   AsmBlock *addWork(uint16_t addr, AsmBlock **curBlock);
 
   void identifyAsmBlocks();
+  bool recordedUpper(uint16_t addr) const;
 
   void printAsmCodeRange(const AsmBlock &block, std::optional<uint32_t> &lastAddr);
   void printAsmDataRange(Range r);
@@ -496,7 +513,7 @@ private:
   void printSimpleCRange(FILE *f, const AsmBlock &block, const AsmBlock *nextBlock);
   /// \return true if the generated instruction "falls through" to whatever
   ///     follows.
-  bool printSimpleCInst(FILE *f, uint16_t pc, CPUInst inst);
+  bool printSimpleCInst(FILE *f, uint16_t pc, CPUInst inst, bool dynamicOperand = false);
   std::string simpleCRead(CPUInst inst) const;
   static const char *simpleCReadOp(CPUInst inst);
   static const char *simpleCWriteOp(CPUInst inst);
@@ -507,10 +524,12 @@ private:
   uint16_t scPC_ = 0;
   /// Whether the current operand supports self modification.
   bool scSelfModOperand_ = false;
+  bool scDynamicOperand_ = false;
 
 private:
   /// Optional path to a JSON file with runtime data.
   std::string runDataPath_;
+  bool languageCard_ = false;
 
   /// Optional runtime execution data.
   std::unique_ptr<RuntimeData> runData_;

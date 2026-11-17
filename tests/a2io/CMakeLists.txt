@@ -9,3 +9,6 @@
 # nothing tested a2io directly.
 add_executable(a2io-test a2io_test.c)
 target_link_libraries(a2io-test a2io)
+
+add_executable(language-card-generated-test language_card_generated_test.c)
+target_link_libraries(language-card-generated-test a2io)

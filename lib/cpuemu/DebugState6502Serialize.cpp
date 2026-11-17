@@ -83,6 +83,26 @@ void DebugState6502::finishCollection(const Emu6502 *emu, std::ostream &os) {
     root["Branches"] = branches;
   }
 
+  json upperOpcodes = json::array();
+  for (const auto &[addr, opcodes] : upperOpcodes_)
+    for (uint8_t opcode : opcodes)
+      upperOpcodes.push_back({addr, opcode});
+  root["UpperOpcodes"] = std::move(upperOpcodes);
+  if (languageCardStart_) {
+    const auto &card = languageCardStart_->card;
+    root["LanguageCardStart"] = {
+        {"bank1", std::vector<uint8_t>(card.bank1_ram, card.bank1_ram + sizeof(card.bank1_ram))},
+        {"bank2", std::vector<uint8_t>(card.bank2_ram, card.bank2_ram + sizeof(card.bank2_ram))},
+        {"high", std::vector<uint8_t>(card.high_ram, card.high_ram + sizeof(card.high_ram))},
+        {"rom", std::vector<uint8_t>(card.rom, card.rom + sizeof(card.rom))},
+        {"readRom", card.banked_memory_read_rom},
+        {"bank", card.banked_memory_ram_select == A2_LC_RAM1 ? 1 : 2},
+        {"writeProtected", card.banked_memory_write_protect},
+        {"prevIOAddr", languageCardStart_->prevIOAddr},
+        {"mainRAM", languageCardStart_->mainRAM},
+    };
+  }
+
   json jsonGens;
   for (const auto &gen : generations_) {
     json jsonGen;

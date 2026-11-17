@@ -156,6 +156,8 @@ std::optional<uint16_t> loadB33(const std::vector<uint8_t> &data) {
 void startCollecting() {
   s_emu.addDebugFlags(Emu6502::DebugASM);
   s_dbg.setModeCollect(&s_emu, s_limit);
+  const auto *io = a2host_io();
+  s_dbg.setLanguageCardStart(io->language_card, io->prev_io_addr, s_emu.getMainRAM());
 }
 
 /// Write out what was collected. Called when the engine stops itself, which is

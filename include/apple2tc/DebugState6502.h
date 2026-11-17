@@ -8,12 +8,15 @@
 #pragma once
 
 #include "apple2tc/BitSet.h"
+#include "apple2tc/a2io.h"
 #include "apple2tc/d6502.h"
 #include "apple2tc/emu6502.h"
 
 #include <deque>
 #include <functional>
 #include <ostream>
+#include <optional>
+#include <map>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -47,6 +50,11 @@ public:
 
   void setModeNone();
   void setModeCollect(Emu6502 *emu, unsigned limit);
+  void setLanguageCardStart(
+      const a2_language_card_t &card, uint16_t prevIOAddr, const uint8_t *mainRAM) {
+    languageCardStart_ =
+        LanguageCardStart{card, prevIOAddr, std::vector<uint8_t>(mainRAM, mainRAM + 0xC000)};
+  }
   void setModeTrace(unsigned limit, bool btOnly);
   Mode getMode() const {
     return mode_;
@@ -204,6 +212,15 @@ private:
 
   /// All branches.
   std::unordered_set<BranchDesc, HashBranchDesc> allBranches_{};
+
+  /// Opcodes observed at each address in the language-card window, in execution order.
+  std::map<uint16_t, std::vector<uint8_t>> upperOpcodes_{};
+  struct LanguageCardStart {
+    a2_language_card_t card;
+    uint16_t prevIOAddr;
+    std::vector<uint8_t> mainRAM;
+  };
+  std::optional<LanguageCardStart> languageCardStart_{};
 
   /// Keep track of addresses that are written to in the current generation.
   BitSet memWritten_{0x10000};

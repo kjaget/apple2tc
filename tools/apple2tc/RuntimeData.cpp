@@ -20,6 +20,20 @@
 
 using json = nlohmann::json;
 
+static std::vector<uint8_t> loadLanguageCardBytes(
+    const json &value, size_t expectedSize, const std::string &path) {
+  if (!value.is_array() || value.size() != expectedSize)
+    throw std::runtime_error("Invalid LanguageCardStart byte array in " + path);
+  std::vector<uint8_t> bytes;
+  bytes.reserve(expectedSize);
+  for (const auto &entry : value) {
+    if (!entry.is_number_integer() || entry < 0 || entry > 255)
+      throw std::runtime_error("Invalid LanguageCardStart byte in " + path);
+    bytes.push_back(entry.get<uint8_t>());
+  }
+  return bytes;
+}
+
 const Regs *RuntimeData::getStartRegs() const {
   if (baseStats)
     return &baseStats->startRegs;
@@ -65,7 +79,45 @@ std::unique_ptr<RuntimeData> RuntimeData::load(const std::string &path) {
     res->baseStats = std::move(baseStats);
   }
 
+  it = root.find("LanguageCardStart");
+  if (it != root.end()) {
+    res->languageCardStart.emplace();
+    auto &start = *res->languageCardStart;
+    if (*it == "power-on") {
+      start.powerOn = true;
+    } else {
+      start.bank1 = loadLanguageCardBytes(it->at("bank1"), 0x1000, path);
+      start.bank2 = loadLanguageCardBytes(it->at("bank2"), 0x1000, path);
+      start.high = loadLanguageCardBytes(it->at("high"), 0x2000, path);
+      start.rom = loadLanguageCardBytes(it->at("rom"), 0x3000, path);
+      start.mainRAM = loadLanguageCardBytes(it->at("mainRAM"), 0xC000, path);
+      start.readRom = it->at("readRom").get<bool>();
+      start.bank = it->at("bank").get<unsigned>();
+      start.writeProtected = it->at("writeProtected").get<bool>();
+      unsigned prev = it->at("prevIOAddr").get<unsigned>();
+      if ((start.bank != 1 && start.bank != 2) || prev > 0xFFFF)
+        throw std::runtime_error("Invalid LanguageCardStart in " + path);
+      start.prevIOAddr = (uint16_t)prev;
+    }
+  }
+
   res->branchTargets = static_cast<std::vector<uint16_t>>(root["BranchTargets"]);
+
+  it = root.find("UpperOpcodes");
+  if (it != root.end()) {
+    if (!it->is_array())
+      throw std::runtime_error("Invalid UpperOpcodes in " + path);
+    res->upperOpcodes.emplace();
+    for (const auto &entry : *it) {
+      if (!entry.is_array() || entry.size() != 2)
+        throw std::runtime_error("Invalid UpperOpcodes entry in " + path);
+      unsigned addr = entry[0].get<unsigned>();
+      unsigned opcode = entry[1].get<unsigned>();
+      if (addr < 0xD000 || addr > 0xFFFF || opcode > 0xFF)
+        throw std::runtime_error("Invalid UpperOpcodes address or opcode in " + path);
+      res->upperOpcodes->emplace((uint16_t)addr, (uint8_t)opcode);
+    }
+  }
 
   it = root.find("Branches");
   if (it != root.end()) {

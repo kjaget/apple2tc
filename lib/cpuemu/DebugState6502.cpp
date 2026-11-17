@@ -24,6 +24,8 @@ void DebugState6502::setModeCollect(Emu6502 *emu, unsigned int limit) {
   memWritten_.clear();
   memExecStart_.clear();
   memExecFull_.clear();
+  upperOpcodes_.clear();
+  languageCardStart_.reset();
   generations_.clear();
   generations_.emplace_back(emu->getRegs());
 }
@@ -63,6 +65,8 @@ void DebugState6502::printHistory() {
 void DebugState6502::clearCollectedData() {
   branchTargets_.clear();
   allBranches_.clear();
+  upperOpcodes_.clear();
+  languageCardStart_.reset();
   generations_.clear();
 }
 
@@ -131,11 +135,15 @@ void DebugState6502::addRecord(const InstRecord &rec) {
   history_.push_back(rec);
 }
 
+static uint8_t debug_peek(Emu6502 *emu, uint16_t addr) {
+  return addr >= 0xD000 ? emu->getMainRAM()[addr] : emu->ram_peek(addr);
+}
+
 static inline ThreeBytes ram_peek3(Emu6502 *emu, uint16_t addr) {
   ThreeBytes b;
-  b.d[0] = emu->ram_peek(addr);
-  b.d[1] = emu->ram_peek(addr + 1);
-  b.d[2] = emu->ram_peek(addr + 2);
+  b.d[0] = debug_peek(emu, addr);
+  b.d[1] = debug_peek(emu, (uint16_t)(addr + 1));
+  b.d[2] = debug_peek(emu, (uint16_t)(addr + 2));
   return b;
 }
 
@@ -160,7 +168,7 @@ Emu6502::StopReason DebugState6502::debugState(Emu6502 *emu, uint16_t pc) {
 
   if (traceOnlyBT_) {
     bool wasBranchTarget = branchTarget_;
-    CPUOpcode opc = decodeOpcode(emu->ram_peek(pc));
+    CPUOpcode opc = decodeOpcode(debug_peek(emu, pc));
     branchTarget_ = instIsBranch(opc.kind, opc.addrMode) || opc.kind == CPUInstKind::RTS;
     // If the current instruction was not a branch, leave.
     if (!wasBranchTarget)
@@ -269,11 +277,23 @@ static inline int getStackChange(CPUInstKind kind) {
 
 Emu6502::StopReason DebugState6502::collectData(Emu6502 *emu, uint16_t pc) {
   ThreeBytes b = ram_peek3(emu, pc);
+  if (pc >= 0xD000) {
+    auto &opcodes = upperOpcodes_[pc];
+    if (std::find(opcodes.begin(), opcodes.end(), b.d[0]) == opcodes.end())
+      opcodes.push_back(b.d[0]);
+  }
   CPUInst inst = decodeInst(pc, b);
   Emu6502::Regs regs = emu->getRegs();
   // Effective address.
-  uint16_t ea = inst.kind == CPUInstKind::RTS ? stack_peek16(emu, regs.sp) + 1
-                                              : operandEA(emu, regs, inst.addrMode, inst.operand);
+  uint16_t ea;
+  if (inst.kind == CPUInstKind::RTS)
+    ea = stack_peek16(emu, regs.sp) + 1;
+  else if (inst.kind == CPUInstKind::RTI)
+    ea = stack_peek16(emu, (uint8_t)(regs.sp + 1));
+  else if (inst.kind == CPUInstKind::BRK)
+    ea = debug_peek(emu, 0xFFFE) + (debug_peek(emu, 0xFFFF) << 8);
+  else
+    ea = operandEA(emu, regs, inst.addrMode, inst.operand);
 
   // Track whether D was ever set and used as set.
   if (regs.status & Emu6502::STATUS_D) {
