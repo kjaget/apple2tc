@@ -1,7 +1,7 @@
-// Loaded binary at [$0300..$0336]
+// Loaded binary at [$0300..$0337]
 // --code-at: 2 asserted edges applied
 // 2 new runtime blocks added
-// code labels: 6
+// code labels: 5
 // data labels: 4
 // Gen    :
 // Kill   :
@@ -22,34 +22,14 @@ function func1
 /*$0312*/       RamPoke8      0x0010, 0x30
 /*$0316*/       RamPoke8      0x0011, 0x03
 /*$0318*/       JmpInd        (CPUAddr2BB (RamPeek16al 0x0010)), %bb_0330
-%bb_0330:  // [$0330] Pred(%bb_0320) Succ()
-/*$0330*/       AddCycles     13
+%bb_0330:  // [$0330] Pred(%bb_0320) Succ(%bb_0335)
+/*$0330*/       AddCycles     6
 /*$0332*/       RamPoke8      0x1001, 0x22
-/*$0335*/       Call          func2, 0xfffe
-/*$0337*/       Abort         0x0335, 0x0337, 0x02
-%bb_0337:  // [$0337] Pred() Succ()
-                AddCycles     0
-                Abort         0x0337, 0x0337, 0x03
-%bb_ffff:  // [$FFFF] Pred() Succ()
-/*$FFFF*/       AddCycles     0
-                Abort         0xffff, 0xffff, 0x03
+                Jmp           %bb_0335
+%bb_0335:  // [$0335] Pred(%bb_0330, %bb_0335) Succ(%bb_0335)
+/*$0335*/       AddCycles     3
+                Jmp           %bb_0335
 %bb2:  // Pred() Succ()
                 Exit
-%bb3:  // [$10100] Pred() Succ()
-/*$0335*/       Push8         (EncodeFlags (LoadR8 STATUS_C) (LoadR8 STATUS_NotZ) (LoadR8 STATUS_I) (LoadR8 STATUS_D) (LoadR8 STATUS_V) (LoadR8 STATUS_N))
-/*$FA40*/       Abort         0x0335, 0xfa40, 0x01
 end func1
-
-// Gen    :
-// Kill   :
-// Mod    :
-// LiveIn :
-// LiveOut:
-function func2
-%bb4:  // [$10100] Pred() Succ()
-/*$0335*/       Push8         (EncodeFlags (LoadR8 STATUS_C) (LoadR8 STATUS_NotZ) (LoadR8 STATUS_I) (LoadR8 STATUS_D) (LoadR8 STATUS_V) (LoadR8 STATUS_N))
-/*$FA40*/       Abort         0x0335, 0xfa40, 0x01
-%bb5:  // Pred() Succ()
-                Exit
-end func2
 

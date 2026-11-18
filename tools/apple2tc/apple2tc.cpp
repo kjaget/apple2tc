@@ -58,7 +58,7 @@ static void printHelp() {
   fprintf(stderr, "  --rom               Input file is a ROM\n");
   fprintf(stderr, "  --asm               Generate asm listing (default)\n");
   fprintf(stderr, "  --simple-c          Generate simple C code\n");
-  fprintf(stderr, "  --language-card     Generate bank-aware simple C (requires a new recording)\n");
+  fprintf(stderr, "  --language-card     Enable language-card mapping (requires a new recording)\n");
   fprintf(stderr, "  --ir                Generate IR\n");
   fprintf(stderr, "  --irc1              Generate C1 representation of the IR\n");
   fprintf(stderr, "  --dump-reg-liveness Dump per-function CPU register liveness\n");
@@ -212,8 +212,8 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  if (languageCard && action != Action::GenSimpleC) {
-    fprintf(stderr, "--language-card requires --simple-c\n");
+  if (languageCard && action != Action::GenSimpleC && action != Action::GenIRC1) {
+    fprintf(stderr, "--language-card requires --simple-c or --irc1\n");
     return 2;
   }
   if (languageCard && !coveragePath.empty()) {
@@ -227,7 +227,7 @@ int main(int argc, char **argv) {
   try {
     auto dis = std::make_shared<Disas>(runDataPath);
     dis->setLanguageCard(languageCard);
-    dis->setUseFirstObserved(action == Action::GenSimpleC);
+    dis->setUseFirstObserved(action != Action::GenAsm);
     if (!codeAtPath.empty())
       dis->setCodeAt(loadCodeAt(codeAtPath));
     if (!inlineStrPath.empty()) {

@@ -26,7 +26,14 @@ int main(int argc, char **argv) {
   check(io->language_card.banked_memory_write_protect, 0, "restored latch enables writes");
 #endif
   if (argc > 1) {
-    if (strcmp(argv[1], "changed-main-opcode") == 0) {
+    if (strcmp(argv[1], "legacy-mapping") == 0) {
+      const uint8_t expected[] = {0x22, 0x11, 0x22, 0xFF, 0x33, 0x33, 0x51, 0x52, 0x53};
+      run_emulated(3000);
+      for (unsigned i = 0; i < sizeof(expected); ++i)
+        check(ram_peek(0x0200 + i), expected[i], "legacy mapping");
+      check(get_ram()[0xD100], 0x33, "legacy visible upper memory view");
+      return 0;
+    } else if (strcmp(argv[1], "changed-main-opcode") == 0) {
       poke(0x0300, 0xFF);
     } else if (strcmp(argv[1], "observed-operands") == 0) {
       s_pc = 0x0300;

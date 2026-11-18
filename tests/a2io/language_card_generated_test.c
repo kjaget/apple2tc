@@ -1,4 +1,3 @@
-#define APPLE2TC_LANGUAGE_CARD
 #include "apple2tc/system-inc.h"
 #include "apple2tc/a2io.h"
 

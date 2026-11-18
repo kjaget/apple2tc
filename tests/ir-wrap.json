@@ -1,0 +1,8 @@
+{
+  "BranchTargets": [],
+  "FirstInstructions": [[65535, 169, 90, 141, false]],
+  "generations": [{
+    "regs": {"pc": 65535, "a": 0, "x": 0, "y": 0, "sp": 255, "status": 32},
+    "code": []
+  }]
+}

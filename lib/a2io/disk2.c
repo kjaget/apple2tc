@@ -241,7 +241,7 @@ static uint8_t read_nibble(a2_disk2_t *disk, unsigned cycles) {
     uint8_t *track_base = drv->nib_data + drv->current_track * DISK2_NIB_TRACK_SIZE;
     disk->data_register = track_base[drv->position];
 
-    printf("read_nibble : track %d, pos %d, byte 0x%02X\n", drv->current_track, drv->position, disk->data_register);
+    // printf("read_nibble : track %d, pos %d, byte 0x%02X\n", drv->current_track, drv->position, disk->data_register);
     return disk->data_register;
   }
 

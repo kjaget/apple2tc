@@ -40,6 +40,7 @@ class IRC1 {
 
   /// Blocks for which we require CPU address mapping.
   std::vector<BasicBlock *> sortedDynamicBlocks_{};
+  bool haveDynamicBlocks_ = false;
 
   /// Descriptor of a single temporary variable.
   struct TmpVar {
@@ -80,7 +81,7 @@ private:
 
   /// Whether the function needs "dynamic basic blocks".
   bool needDynamicBlocks() const {
-    return !sortedDynamicBlocks_.empty();
+    return haveDynamicBlocks_;
   }
 
   /// Return an existing or assign a new block ID.

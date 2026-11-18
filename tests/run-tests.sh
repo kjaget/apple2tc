@@ -153,6 +153,34 @@ for addr in 0x0343 0x0353; do
 done
 rm selfmod-overlap-test.c selfmod-overlap-test.ir selfmod-overlap.b33
 
+# Common IR behavior without language-card mode: recorded operand changes,
+# BRK/RTI with a ROM vector, and fall-through across $FFFF.
+compile_general_ir() {
+  local test=$1
+  $a6502 "ir-$test.s" "ir-$test.b33"
+  $apple2tc "ir-$test.b33" --irc1 -O3 --run-data="ir-$test.json" \
+    > ir-general-generated.c
+  cc -std=gnu11 -pthread -I../include -I. \
+    -c ir-general-driver.c -o ir-general-driver.o
+  c++ ir-general-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
+    -pthread -lm -o ir-general-test
+}
+compile_general_ir observed
+grep -q 'ram_peek(0x0381)' ir-general-generated.c
+./ir-general-test 11 22
+$a6502 ir-interrupt-static.s ir-interrupt-static.b33
+$apple2tc ir-interrupt-static.b33 --irc1 -O3 --code-at=ir-interrupt-static.txt \
+  > ir-general-generated.c
+cc -std=gnu11 -pthread -DTEST_INTERRUPT -I../include -I. \
+  -c ir-general-driver.c -o ir-general-driver.o
+c++ ir-general-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
+  -pthread -lm -o ir-general-test
+./ir-general-test 55
+compile_general_ir wrap
+./ir-general-test 5a
+rm ir-observed.b33 ir-interrupt-static.b33 ir-wrap.b33 ir-general-generated.c \
+  ir-general-driver.o ir-general-test
+
 # Generate and execute language-card code with differing opcodes at the same PC.
 $a6502 language-card.s language-card.b33
 $apple2tc language-card.b33 --simple-c --language-card > language-card-no-recording.c
@@ -162,7 +190,7 @@ if $apple2tc language-card.b33 --ir --language-card >language-card-error.out 2>&
   echo "FAIL: accepted --language-card without --simple-c" >&2
   exit 1
 fi
-grep -q -- '--language-card requires --simple-c' language-card-error.out
+grep -q -- '--language-card requires --simple-c or --irc1' language-card-error.out
 $apple2tc language-card.b33 --simple-c --language-card --run-data=language-card.json \
   > language-card-generated.c
 python3 - <<'PY'
@@ -458,6 +486,91 @@ c++ language-card-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.
   -o language-card-test
 ./language-card-test
 "$bin/tests/a2io/language-card-generated-test"
+
+# Exercise the same language-card state and operand behavior through optimized
+# IR-C1. The ordering test also compares against an interpreter snapshot.
+compile_lc_ir() {
+  local input=$1 macro=$2
+  shift 2
+  $apple2tc "$input" --irc1 -O3 --language-card "$@" > language-card-ir-generated.c
+  cc -std=gnu11 -pthread -D"$macro" -I../include -I. \
+    -c language-card-ir-driver.c -o language-card-ir-driver.o
+  c++ language-card-ir-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
+    -pthread -lm -o language-card-ir-test
+}
+
+$a6502 language-card-ir.s language-card-ir.b33
+$apple2tc language-card-ir.b33 --simple-c > language-card-generated.c
+cc -std=c11 -I../include -I. -c language-card-driver.c -o language-card-driver.o
+c++ language-card-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
+  -o language-card-test
+./language-card-test legacy-mapping
+$apple2tc language-card-ir.b33 --irc1 -O3 > language-card-ir-generated.c
+cc -std=gnu11 -pthread -DTEST_ORDER -I../include -I. \
+  -c language-card-ir-driver.c -o language-card-ir-driver.o
+c++ language-card-ir-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
+  -pthread -lm -o language-card-ir-test
+./language-card-ir-test
+$a2run language-card-ir.b33 --preload --from-rom --frames=150 \
+  --kbd-file=language-card-keys.txt --snapshot-at=03f0 --snapshot-out=language-card-ir-snapshot \
+  >language-card-ir-reference.out 2>&1
+compile_lc_ir language-card-ir.b33 TEST_ORDER
+./language-card-ir-test language-card-ir-snapshot
+compile_lc_ir language-card-ir.b33 TEST_ORDER --no-ir-trees
+./language-card-ir-test language-card-ir-snapshot
+
+python3 - <<'PY'
+import json
+
+# Preserve the collected edges and instruction observations while entering the
+# test program directly, avoiding the boot ROM's unrelated work.
+with open("operand-observed.json") as f:
+    observed = json.load(f)
+observed["LanguageCardStart"] = "power-on"
+observed["BaseStats"]["startRegs"].update(pc=0x300, a=0, x=0, y=0, sp=0xff, status=0x20)
+with open("language-card-ir-observed.json", "w") as f:
+    json.dump(observed, f)
+
+with open("language-card.json") as f:
+    interrupt = json.load(f)
+interrupt["Branches"] = {
+    str(0xD005): [0x339, 0x363, 0x371],
+    str(0xFBB3): [0x33C],
+    str(0x399): [0xE000],
+    str(0xE005): [0x39B],
+}
+with open("language-card-ir-interrupt.json", "w") as f:
+    json.dump(interrupt, f)
+interrupt["FirstInstructions"] = [
+    inst for inst in interrupt["FirstInstructions"] if inst[0] != 0xD000
+]
+with open("language-card-ir-unknown.json", "w") as f:
+    json.dump(interrupt, f)
+PY
+
+compile_lc_ir operand-observed.b33 TEST_OBSERVED --run-data=language-card-ir-observed.json
+./language-card-ir-test
+compile_lc_ir language-card.b33 TEST_INTERRUPT --run-data=language-card-ir-interrupt.json
+./language-card-ir-test
+compile_lc_ir language-card.b33 TEST_LC_RESTORE --run-data=language-card-snapshot.json
+./language-card-ir-test
+compile_lc_ir language-card.b33 TEST_INTERRUPT --run-data=language-card-ir-unknown.json
+if ./language-card-ir-test >language-card-ir-error.out 2>&1; then
+  echo "FAIL: IR-C1 accepted an unrecorded upper instruction" >&2
+  exit 1
+fi
+grep -q 'target=\$D000' language-card-ir-error.out
+
+# An indirect return with no known targets must still produce valid C that
+# reports an unknown target, rather than a missing block-map declaration.
+printf '        org $300\n        rti\n' > language-card-ir-no-target.s
+$a6502 language-card-ir-no-target.s language-card-ir-no-target.b33
+compile_lc_ir language-card-ir-no-target.b33 TEST_INTERRUPT
+rm language-card-ir.b33 language-card-ir-generated.c language-card-ir-driver.o language-card-ir-test \
+  language-card-ir-reference.out language-card-ir-snapshot language-card-ir-snapshot.regs \
+  language-card-ir-observed.json language-card-ir-interrupt.json language-card-ir-unknown.json \
+  language-card-ir-error.out language-card-ir-no-target.s language-card-ir-no-target.b33
+
 rm language-card.b33 language-card-generated.c language-card-driver.o language-card-test \
   language-card-error.out language-card-collect.out language-card-collected.json \
   language-card-snapshot.json language-card-old.json language-card-legacy.json language-card-mismatch.json \

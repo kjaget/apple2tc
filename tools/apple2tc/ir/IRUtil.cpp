@@ -6,6 +6,7 @@
  */
 #include "IRUtil.h"
 
+#include "../Disas.h"
 #include "apple2tc/support.h"
 
 namespace ir {
@@ -210,6 +211,20 @@ void markExpressionTrees(BasicBlock *bb, InstSet &validTrees) {
           }
           return false;
         });
+      }
+      if (inst->getKind() == ValueKind::Peek8 || inst->getKind() == ValueKind::Peek16al ||
+          inst->getKind() == ValueKind::Peek16un || inst->getKind() == ValueKind::Poke8) {
+        auto [addr, width] = inst->memoryAddress();
+        if (classifyMemoryAddr(addr, width).overlap16WithWrap(Range32(0xC080, 0xC090))) {
+          // A soft switch changes upper-memory reads without writing their addresses.
+          invalidateTreesIf([](Instruction *tInst) {
+            if (!tInst->readsMemory())
+              return false;
+            auto [readAddr, readWidth] = tInst->memoryAddress();
+            return classifyMemoryAddr(readAddr, readWidth)
+                .overlap16WithWrap(Range32(0xD000, 0x10000));
+          });
+        }
       }
     }
   }

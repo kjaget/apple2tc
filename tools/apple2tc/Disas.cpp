@@ -276,11 +276,12 @@ void Disas::identifyAsmBlocks() {
         break;
       } else if (inst.kind == CPUInstKind::BRK) {
         block->setEndAddress(addr);
-        // Add the next address to the queue, but do not connect it as a "fall"
-        // target.
-        addWork(addr, nullptr);
-        if (languageCard_)
-          addWork((uint16_t)(addr - inst.size + 2), nullptr);
+        // RTI resumes two bytes after BRK, not at the following opcode byte.
+        addWork((uint16_t)(addr - inst.size + 2), nullptr);
+        if (memRanges_.empty() || memRanges_.back().to < A2_IRQ_VEC + 1) {
+          loadROM(apple2plus_rom, apple2plus_rom_len);
+          fprintf(stderr, "Auto-loaded Apple II ROM\n");
+        }
         AsmBlock *branch = recordedOnly ? nullptr : addWork(peek16(A2_IRQ_VEC), &block);
         block->finish(nullptr, branch, true);
         break;
@@ -292,8 +293,9 @@ void Disas::identifyAsmBlocks() {
 
       // If we wrapped around.
       if (addr >= 0x10000) {
-        block->setEndAddress(recordedOnly ? addr : 0x10000);
-        block->finish(nullptr, nullptr, true);
+        block->setEndAddress(addr);
+        AsmBlock *next = addWork((uint16_t)addr, nullptr);
+        block->finish(next, nullptr);
         break;
       }
     }

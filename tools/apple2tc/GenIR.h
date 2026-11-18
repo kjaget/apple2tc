@@ -29,10 +29,6 @@ class GenIR {
   /// Map from an AsmBlock to an IR BasicBlock.
   std::unordered_map<const AsmBlock *, BasicBlock *> asmBlockMap_{};
 
-  /// A basic block generated on demand for the BRK instruction, if encountered.
-  /// It contains a PHP and a jmp to IRQ_VEC.
-  BasicBlock *brkBB_ = nullptr;
-
 public:
   GenIR(const std::shared_ptr<Disas> &disas, IRContext *ctx);
   ~GenIR();

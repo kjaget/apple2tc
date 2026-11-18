@@ -71,6 +71,10 @@ struct ResAndStatus {
 static inline void ram_poke_impl(uint16_t addr, uint8_t value) {
   if (g_debug & DebugMem)
     printf("%8u $%04x: $%04x=$%02x\n", s_cycles, s_pc, addr, value);
+  if (addr >= 0xD000) {
+    io_poke(addr, value);
+    return;
+  }
   s_ram[addr] = value;
 }
 static inline uint8_t peek_zpg(uint8_t addr) {
@@ -84,17 +88,15 @@ static inline uint16_t peek16_zpg(uint8_t addr) {
 }
 
 static inline uint8_t peek(uint16_t addr) {
-  if (addr >= 0xC000 && addr <= 0xCFFF)
+  if (addr >= 0xC000)
     return io_peek(addr);
   return s_ram[addr];
 }
 static inline void poke(uint16_t addr, uint8_t value) {
   if (addr < 0xC000) {
     ram_poke_impl(addr, value);
-  } else if (addr <= 0xCFFF) {
-    io_poke(addr, value);
   } else {
-    // Ignore writes to ROM.
+    io_poke(addr, value);
   }
 }
 static inline uint16_t peek16(uint16_t addr) {

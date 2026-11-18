@@ -86,9 +86,7 @@ unsigned get_cycles(void) {
 }
 
 const uint8_t *get_ram(void) {
-#ifdef APPLE2TC_LANGUAGE_CARD
   io_refresh_main_ram_view(s_ram);
-#endif
   return s_ram;
 }
 
@@ -103,22 +101,18 @@ const uint8_t *get_hires_page(unsigned page_index) {
 static inline void ram_poke_impl(uint16_t addr, uint8_t value) {
   if (g_debug & DebugMem)
     printf("$%04x: $%04x=$%02x\n", s_pc, addr, value);
-#ifdef APPLE2TC_LANGUAGE_CARD
   if (addr >= 0xD000) {
     io_poke(addr, value);
     return;
   }
-#endif
   s_ram[addr] = value;
 }
 void ram_poke(uint16_t addr, uint8_t value) {
   ram_poke_impl(addr, value);
 }
 uint8_t ram_peek(uint16_t addr) {
-#ifdef APPLE2TC_LANGUAGE_CARD
   if (addr >= 0xD000)
     return io_peek_upper(addr);
-#endif
   return s_ram[addr];
 }
 uint16_t ram_peek16(uint16_t addr) {
@@ -126,10 +120,8 @@ uint16_t ram_peek16(uint16_t addr) {
 }
 uint16_t ram_peek16al(uint16_t addr) {
   assert(!(addr & 1) && "ram_peek16al() address must be word aligned");
-#ifdef APPLE2TC_LANGUAGE_CARD
   if (addr >= 0xD000)
     return ram_peek16(addr);
-#endif
   return *(uint16_t *)(s_ram + addr);
 }
 
@@ -144,27 +136,15 @@ static uint16_t peek16_zpg(uint8_t addr) {
 }
 
 static uint8_t peek(uint16_t addr) {
-#ifdef APPLE2TC_LANGUAGE_CARD
   if (addr >= 0xC000)
     return io_peek(addr);
-#else
-  if (addr >= 0xC000 && addr <= 0xCFFF)
-    return io_peek(addr);
-#endif
   return s_ram[addr];
 }
 static inline void poke(uint16_t addr, uint8_t value) {
   if (addr < 0xC000) {
     ram_poke_impl(addr, value);
-#ifdef APPLE2TC_LANGUAGE_CARD
   } else {
     io_poke(addr, value);
-#else
-  } else if (addr <= 0xCFFF) {
-    io_poke(addr, value);
-  } else {
-    // Ignore writes to ROM.
-#endif
   }
 }
 static uint16_t peek16(uint16_t addr) {

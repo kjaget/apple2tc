@@ -14,43 +14,11 @@
 #include "apple2tc/apple2plus_rom.h"
 
 void Disas::printSimpleCPrologue(FILE *f) {
-  if (languageCard_)
-    fprintf(f, "\n#define APPLE2TC_LANGUAGE_CARD\n");
   fprintf(f, "\n#include \"apple2tc/system-inc.h\"\n\n");
 
-  if (languageCard_) {
-    if (runData_->languageCardStart->powerOn)
-      fprintf(f, "static const uint8_t s_language_card_rom[0x3000];\n");
-    else {
-      fprintf(f, "static const uint8_t s_language_card_state[0x7000];\n");
-      fprintf(f, "static const uint8_t s_initial_ram[0xc000];\n");
-    }
-  }
-  for (auto const &mr : memRanges_) {
-    if (languageCard_ && !runData_->languageCardStart->powerOn)
-      continue;
-    unsigned len = mr.to - mr.from + 1;
-    fprintf(f, "static const uint8_t s_mem_%04x[0x%04x];\n", mr.from, len);
-  }
-
+  printMemoryDeclarations(f);
   fprintf(f, "\nvoid init_emulated(void) {\n");
-  if (languageCard_) {
-    const auto &start = *runData_->languageCardStart;
-    if (start.powerOn)
-      fprintf(f, "  io_load_rom(s_language_card_rom, 0x3000);\n");
-    else
-      fprintf(f, "  io_restore_language_card(s_language_card_state, %u, %u, %u, 0x%04x);\n",
-              (unsigned)start.readRom, start.bank, (unsigned)start.writeProtected, start.prevIOAddr);
-    if (!start.powerOn)
-      fprintf(f, "  memcpy(s_ram, s_initial_ram, 0xc000);\n");
-  }
-  for (auto const &mr : memRanges_) {
-    unsigned len = mr.to - mr.from + 1;
-    if (languageCard_ &&
-        (!runData_->languageCardStart->powerOn || mr.from >= 0xD000))
-      continue;
-    fprintf(f, "  memcpy(s_ram + 0x%04x, s_mem_%04x, 0x%04x);\n", mr.from, mr.from, len);
-  }
+  printMemoryInitialization(f);
 
   // Generation 0 saves the registers on start. If it is present, use it.
   // FIXME: use startup regs.
@@ -68,7 +36,50 @@ void Disas::printSimpleCPrologue(FILE *f) {
   fprintf(f, "}\n");
 }
 
+void Disas::printMemoryDeclarations(FILE *f) {
+  if (languageCard_) {
+    if (runData_->languageCardStart->powerOn)
+      fprintf(f, "static const uint8_t s_language_card_rom[0x3000];\n");
+    else {
+      fprintf(f, "static const uint8_t s_language_card_state[0x7000];\n");
+      fprintf(f, "static const uint8_t s_initial_ram[0xc000];\n");
+    }
+  }
+  for (auto const &mr : memRanges_) {
+    if (languageCard_ && !runData_->languageCardStart->powerOn)
+      continue;
+    unsigned len = mr.to - mr.from + 1;
+    fprintf(f, "static const uint8_t s_mem_%04x[0x%04x];\n", mr.from, len);
+  }
+}
+
+void Disas::printMemoryInitialization(FILE *f) {
+  if (languageCard_) {
+    const auto &start = *runData_->languageCardStart;
+    if (start.powerOn)
+      fprintf(f, "  io_load_rom(s_language_card_rom, 0x3000);\n");
+    else
+      fprintf(f, "  io_restore_language_card(s_language_card_state, %u, %u, %u, 0x%04x);\n",
+              (unsigned)start.readRom, start.bank, (unsigned)start.writeProtected, start.prevIOAddr);
+    if (!start.powerOn)
+      fprintf(f, "  memcpy(s_ram, s_initial_ram, 0xc000);\n");
+  }
+  for (auto const &mr : memRanges_) {
+    unsigned len = mr.to - mr.from + 1;
+    if (languageCard_ &&
+        (!runData_->languageCardStart->powerOn || mr.from >= 0xD000))
+      continue;
+    fprintf(f, "  memcpy(s_ram + 0x%04x, s_mem_%04x, 0x%04x);\n", mr.from, mr.from, len);
+  }
+  if (!languageCard_)
+    fprintf(f, "  io_load_rom(s_ram + 0xd000, 0x3000);\n");
+}
+
 void Disas::printSimpleCEpilogue(FILE *f) {
+  printMemoryDefinitions(f);
+}
+
+void Disas::printMemoryDefinitions(FILE *f) {
   if (languageCard_ && runData_->languageCardStart->powerOn) {
     fprintf(f, "static const uint8_t s_language_card_rom[0x3000] = {");
     const uint8_t *rom = apple2plus_rom;
@@ -169,11 +180,9 @@ void Disas::printSimpleCRange(FILE *f, const AsmBlock &block, const AsmBlock * /
 
   if (fall) {
     const AsmBlock *fallBlock = block.getFallBlock();
-    assert((fallBlock || (languageCard_ && block.endAddr() >= 0x10000)) &&
-           "we fell, so there must be a fall block");
+    assert(fallBlock && "we fell, so there must be a fall block");
     // Always break, so we can track cycles reproducibly.
-    fprintf(f, "      s_pc = 0x%04x;\n",
-            fallBlock ? fallBlock->addr() : (uint16_t)block.endAddr());
+    fprintf(f, "      s_pc = 0x%04x;\n", fallBlock->addr());
     fprintf(f, "      break;\n");
   }
 }
@@ -187,12 +196,9 @@ bool Disas::printSimpleCInst(FILE *f, uint16_t pc, CPUInst inst, bool dynamicOpe
   if (selfModifers_.count(pc))
     fprintf(f, "      // WARNING: performs self modification.\n");
 
-  if (runData_ && runData_->firstInstructions) {
-    auto it = runData_->firstInstructions->find(pc);
-    if (it != runData_->firstInstructions->end() && it->second.operandChanged) {
-      fprintf(f, "      // WARNING: operand self modification.\n");
-      scSelfModOperand_ = true;
-    }
+  if (observedOperandChanged(pc)) {
+    fprintf(f, "      // WARNING: operand self modification.\n");
+    scSelfModOperand_ = true;
   }
   for (unsigned i = 0, e = inst.size; i != e; ++i) {
     if (!checkSelfModified((uint16_t)(pc + i)))

@@ -39,4 +39,4 @@ via_rts:
 via_jmp:
         lda     #$22
         sta     $1001
-        brk     #0
+done:   jmp     done

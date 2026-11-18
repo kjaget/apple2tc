@@ -95,6 +95,7 @@ unsigned get_cycles(void) {
 }
 
 const uint8_t *get_ram(void) {
+  io_refresh_main_ram_view(s_ram);
   return s_ram;
 }
 
@@ -110,6 +111,8 @@ void ram_poke(uint16_t addr, uint8_t value) {
   ram_poke_impl(addr, value);
 }
 uint8_t ram_peek(uint16_t addr) {
+  if (addr >= 0xD000)
+    return io_peek_upper(addr);
   return s_ram[addr];
 }
 uint16_t ram_peek16(uint16_t addr) {
@@ -117,6 +120,8 @@ uint16_t ram_peek16(uint16_t addr) {
 }
 uint16_t ram_peek16al(uint16_t addr) {
   assert(!(addr & 1) && "ram_peek16al() address must be word aligned");
+  if (addr >= 0xD000)
+    return ram_peek16(addr);
   return *(uint16_t *)(s_ram + addr);
 }
 

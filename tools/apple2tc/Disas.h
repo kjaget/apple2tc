@@ -409,6 +409,10 @@ public:
     languageCard_ = enabled;
   }
 
+  bool languageCard() const {
+    return languageCard_;
+  }
+
   void setUseFirstObserved(bool enabled) {
     useFirstObserved_ = enabled;
   }
@@ -447,9 +451,23 @@ public:
     return std::nullopt;
   }
 
+  bool observedOperandChanged(uint16_t pc) const {
+    if (!observedCode_.count(pc) || !runData_ || !runData_->firstInstructions)
+      return false;
+    auto it = runData_->firstInstructions->find(pc);
+    return it != runData_->firstInstructions->end() && it->second.operandChanged;
+  }
+
+  bool canDecodeCode(uint16_t addr) const {
+    return !recordedOnly_[addr] || observedCode_.count(addr);
+  }
+
   void run(bool noGenerations);
   void printAsmListing();
   void printSimpleC(FILE *f);
+  void printMemoryDeclarations(FILE *f);
+  void printMemoryInitialization(FILE *f);
+  void printMemoryDefinitions(FILE *f);
   /// Report, per loaded memory range, how many bytes the disassembler
   /// classified as code and where the gaps are. See the definition for what the
   /// numbers do and do not mean.
@@ -507,9 +525,6 @@ private:
   AsmBlock *addWork(uint16_t addr, AsmBlock **curBlock);
 
   void identifyAsmBlocks();
-  bool canDecodeCode(uint16_t addr) const {
-    return !recordedOnly_[addr] || observedCode_.count(addr);
-  }
   std::map<uint16_t, ThreeBytes> observedCode_{};
   std::vector<bool> recordedOnly_ = std::vector<bool>(0x10000, false);
 

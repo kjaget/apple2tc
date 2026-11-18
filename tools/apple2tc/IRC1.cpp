@@ -19,16 +19,10 @@ static inline constexpr bool BLOCKMAP_BSEARCH = true;
 void IRC1Mod::printPrologue() {
   fprintf(os_, "\n#include \"apple2tc/system2-inc.h\"\n\n");
 
-  for (auto const &mr : mod_->getDisas()->memRanges()) {
-    unsigned len = mr.to - mr.from + 1;
-    fprintf(os_, "static const uint8_t s_mem_%04x[0x%04x];\n", mr.from, len);
-  }
+  mod_->getDisas()->printMemoryDeclarations(os_);
 
   fprintf(os_, "\nvoid init_emulated(void) {\n");
-  for (auto const &mr : mod_->getDisas()->memRanges()) {
-    unsigned len = mr.to - mr.from + 1;
-    fprintf(os_, "  memcpy(s_ram + 0x%04x, s_mem_%04x, 0x%04x);\n", mr.from, mr.from, len);
-  }
+  mod_->getDisas()->printMemoryInitialization(os_);
 
   fprintf(os_, "}\n");
 
@@ -67,21 +61,7 @@ addr_to_block_id(uint16_t from_pc, uint16_t addr, const unsigned *block_map, siz
 }
 
 void IRC1Mod::printEpilogue() {
-  for (auto const &mr : mod_->getDisas()->memRanges()) {
-    unsigned len = mr.to - mr.from + 1;
-    fprintf(os_, "static const uint8_t s_mem_%04x[0x%04x] = {", mr.from, len);
-    for (unsigned i = 0; i != len; ++i) {
-      if (i % 16 == 0)
-        fprintf(os_, "\n  ");
-      else
-        fputc(' ', os_);
-      fprintf(os_, "0x%02X", mod_->getDisas()->peek(mr.from + i));
-      if (i != len - 1)
-        fputc(',', os_);
-    }
-    fputc('\n', os_);
-    fprintf(os_, "};\n");
-  }
+  mod_->getDisas()->printMemoryDefinitions(os_);
 }
 
 void IRC1Mod::run() {
@@ -311,7 +291,7 @@ void IRC1::regAllocBBTrees(BasicBlock *bb) {
 }
 
 void IRC1::printAddr2BlockMap() {
-  if (sortedDynamicBlocks_.empty())
+  if (!needDynamicBlocks())
     return;
 
   std::vector<std::pair<uint16_t, unsigned>> map{};
@@ -361,6 +341,7 @@ static unsigned find_block_id_%s(uint16_t from_pc, uint16_t addr) {
     fprintf(os_, "  default:\n");
     fprintf(os_, "    fprintf(stderr, \"Unknown address $%%04X\\n\", addr);\n");
     fprintf(os_, "    error_handler(from_pc);\n");
+    fprintf(os_, "    abort();\n");
     fprintf(os_, "  }\n");
     fprintf(os_, "}\n\n");
   }
@@ -416,7 +397,7 @@ void IRC1::runFunc() {
 
   // Make sure the entry block is 0.
   PANIC_ASSERT(blockID(sortedBlocks[0]) == 0);
-  if (!sortedDynamicBlocks_.empty())
+  if (needDynamicBlocks())
     fprintf(os_, "static unsigned find_block_id_%s(uint16_t from_pc, uint16_t addr);\n\n", name_);
 
   regAlloc();
@@ -485,7 +466,8 @@ void IRC1::scanForDynamicBlocks() {
     }
   }
 
-  if (haveCPUAddr2BB)
+  haveDynamicBlocks_ = haveCPUAddr2BB;
+  if (haveDynamicBlocks_)
     sortedDynamicBlocks_ = sortByAddress<BasicBlock>(dynamicBlocks, false);
 }
 
@@ -642,7 +624,7 @@ bool IRC1::needBranchTarget(Instruction *inst) {
   uint16_t addr = *inst->getAddress();
   if (!mod_->getDisas()->cfindAsmBlockContaining(addr))
     return false;
-  CPUOpcode opc = decodeOpcode(mod_->getDisas()->peek(addr));
+  CPUInst opc = mod_->getDisas()->decodeCode(addr);
   if (!instIsBranch(opc.kind, opc.addrMode))
     return false;
   return true;

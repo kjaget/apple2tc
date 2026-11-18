@@ -72,6 +72,12 @@ Module *GenIR::run() {
 void GenIR::genAsmBlock(const AsmBlock &asmBlock) {
   builder_.setInsertionBlock(basicBlockFor(&asmBlock));
   builder_.setAddress(asmBlock.addr());
+  if (!dis_->canDecodeCode(asmBlock.addr())) {
+    builder_.createAbort(
+        builder_.getLiteralU16(asmBlock.addr()), builder_.getLiteralU16(asmBlock.addr()),
+        builder_.getLiteralU8(1));
+    return;
+  }
   builder_.createAddCycles(builder_.getLiteralU32(asmBlock.baseCycles(dis_.get())));
 
   for (auto [addr, inst] : asmBlock.instructions(dis_.get())) {
@@ -84,7 +90,7 @@ void GenIR::genAsmBlock(const AsmBlock &asmBlock) {
 }
 
 void GenIR::genInst(uint16_t pc, const CPUInst &inst, const AsmBlock &asmBlock) {
-  selfModOperand_ = false;
+  selfModOperand_ = dis_->observedOperandChanged(pc);
   pc_ = pc;
 
   for (unsigned i = 1, e = inst.size; i != e; ++i) {
@@ -234,17 +240,20 @@ void GenIR::genInst(uint16_t pc, const CPUInst &inst, const AsmBlock &asmBlock) 
       addBranchTargets(jsr, targets);
     }
     break;
-  case CPUInstKind::BRK:
-    if (!brkBB_) {
-      // Lazily create the break BB the first time it is used.
-      auto save = builder_.saveState();
-      brkBB_ = createBB(0x10100, false);
-      builder_.setInsertionBlock(brkBB_);
-      builder_.createPush8(emitEncodeFlags());
-      builder_.createJmp(resolveBranch(dis_->peek16(A2_IRQ_VEC)));
-    }
-    builder_.createJSR(brkBB_, resolveFallBranch(asmBlock));
+  case CPUInstKind::BRK: {
+    uint16_t returnAddr = (uint16_t)(pc + 2);
+    builder_.createPush8(builder_.getLiteralU8(returnAddr >> 8));
+    builder_.createPush8(builder_.getLiteralU8(returnAddr & 0xFF));
+    builder_.createPush8(
+        builder_.createOr8(emitEncodeFlags(), builder_.getLiteralU8(Regs::STATUS_IGNORED)));
+    auto *jmp = builder_.createJmpInd(builder_.createCPUAddr2BB(emitAutoPeek16(A2_IRQ_VEC)));
+    const auto *brkTargets = branchTargetsFrom(pc);
+    if (brkTargets)
+      addBranchTargets(jmp, brkTargets);
+    else
+      jmp->pushOperand(resolveBranch(dis_->peek16(A2_IRQ_VEC)));
     break;
+  }
 
   case CPUInstKind::LDA:
     emitStoreReg8(CPURegKind::A, emitUpdateNZ(genRead(inst)));
@@ -349,8 +358,11 @@ void GenIR::genInst(uint16_t pc, const CPUInst &inst, const AsmBlock &asmBlock) 
 
   case CPUInstKind::RTI: {
     emitDecodeFlags(builder_.createPop8());
-    auto *rts = builder_.createRTS(builder_.getLiteralU8(0));
-    addBranchTargets(rts, branchTargetsFrom(pc));
+    auto *lo = builder_.createPop8();
+    auto *hi = builder_.createPop8();
+    auto *jmp =
+        builder_.createJmpInd(builder_.createCPUAddr2BB(builder_.createMake16(lo, hi)));
+    addBranchTargets(jmp, branchTargetsFrom(pc));
     break;
   }
   case CPUInstKind::RTS: {
@@ -853,7 +865,7 @@ Value *GenIR::genAddr(const CPUInst &inst) {
 
     case CPUAddrMode::Ind_Y:
       // snprintf(buf, sizeof(buf), "peek16_zpg(ram_peek(0x%04x)) + s_y", scPC_ + 1);
-      tmp = emitRamPeek16(pc_ + 1);
+      tmp = builder_.createRamPeek8(builder_.getLiteralU16(pc_ + 1));
       tmp = emitPeek16_zpg(tmp);
       return builder_.createAdd16(tmp, builder_.createZExt8t16(emitLoadReg8(CPURegKind::Y)));
 
@@ -958,7 +970,7 @@ Value *GenIR::emitPeek16_zpg(Value *addr) {
   if (auto *u8 = dyn_cast<LiteralU8>(addr))
     return emitPeek16_zpg(u8->getValue());
 
-  auto *op1 = builder_.createRamPeek8(addr);
+  auto *op1 = builder_.createRamPeek8(builder_.createZExt8t16(addr));
   return builder_.createMake16(
       op1,
       builder_.createRamPeek8(
