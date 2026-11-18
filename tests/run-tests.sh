@@ -155,6 +155,14 @@ rm selfmod-overlap-test.c selfmod-overlap-test.ir selfmod-overlap.b33
 
 # Generate and execute language-card code with differing opcodes at the same PC.
 $a6502 language-card.s language-card.b33
+$apple2tc language-card.b33 --simple-c --language-card > language-card-no-recording.c
+grep -q 'case 0xd000:' language-card-no-recording.c
+cc -std=c11 -I../include -c language-card-no-recording.c -o language-card-no-recording.o
+if $apple2tc language-card.b33 --ir --language-card >language-card-error.out 2>&1; then
+  echo "FAIL: accepted --language-card without --simple-c" >&2
+  exit 1
+fi
+grep -q -- '--language-card requires --simple-c' language-card-error.out
 $apple2tc language-card.b33 --simple-c --language-card --run-data=language-card.json \
   > language-card-generated.c
 python3 - <<'PY'
@@ -194,15 +202,49 @@ import json
 
 with open("language-card-first.json") as f:
     recording = json.load(f)
-assert [entry for entry in recording["UpperOpcodes"] if entry[0] == 0xD000] == [
-    [0xD000, 0xA9], [0xD000, 0xA2]
-]
+assert "UpperOpcodes" not in recording
+first = {entry[0]: entry[1:] for entry in recording["FirstInstructions"]}
+assert first[0xD000] == [0xA9, 0x11, 0x8D, True]
+assert first[0xD005][3] is False
+assert first[0x0300] == [0xAD, 0x81, 0xC0, False]
 assert any(segment["addr"] == 0xD000 and segment["bytes"][0] == 0xA2
            for generation in recording["generations"] for segment in generation["code"])
 assert 0x39B in recording["BranchTargets"], "RTI continuation must be recorded"
 assert 0x39B in recording["Branches"][str(0xE005)]
 assert 0xE000 in recording["Branches"][str(0x399)]
 PY
+
+# Exercise operand changes that static address analysis cannot infer.
+$a6502 operand-observed.s operand-observed.b33
+$a2run operand-observed.b33 --preload --collect --from-rom --frames=150 \
+  --kbd-file=language-card-keys.txt --out=operand-observed.json \
+  >language-card-collect.out 2>&1
+python3 - <<'PY'
+import json
+
+with open("operand-observed.json") as f:
+    recording = json.load(f)
+first = {entry[0]: entry[1:] for entry in recording["FirstInstructions"]}
+assert first[0x0380][:2] == [0xA9, 0x11] and first[0x0380][3] is True
+assert first[0x0382][0] == 0x60 and first[0x0382][3] is False
+assert first[0x03C0][:3] == [0xAD, 0x34, 0x12] and first[0x03C0][3] is True
+assert first[0xD000][:2] == [0xA9, 0x11] and first[0xD000][3] is True
+assert first[0xD002][0] == 0x60 and first[0xD002][3] is False
+assert first[0x0300][3] is False
+PY
+$apple2tc operand-observed.b33 --simple-c --language-card \
+  --run-data=operand-observed.json > language-card-generated.c
+grep -q '/\* \$0380 LDA \*/ s_a = update_nz(peek(0x0381));' language-card-generated.c
+grep -q '/\* \$03C0 LDA \*/ s_a = update_nz(peek(peek16(0x03c1)));' language-card-generated.c
+grep -q '/\* \$D000 LDA \*/ s_a = update_nz(peek(0xd001));' language-card-generated.c
+grep -q '/\* \$0300 LDA \*/ s_a = update_nz(0x80);' language-card-generated.c
+cc -std=c11 -I../include -I. -c language-card-driver.c -o language-card-driver.o
+c++ language-card-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
+  -o language-card-test
+./language-card-test observed-operands
+$apple2tc operand-observed.b33 --simple-c --run-data=operand-observed.json \
+  > language-card-no-card.c
+grep -q '/\* \$0380 LDA \*/ s_a = update_nz(peek(0x0381));' language-card-no-card.c
 
 # Round-trip the collector's startup state, including both banks and the
 # consecutive-switch latch, through the generator and the real host.
@@ -213,7 +255,7 @@ import json
 
 with open("language-card-collected.json") as f:
     recording = json.load(f)
-assert recording["UpperOpcodes"]
+assert recording["FirstInstructions"]
 state = recording["LanguageCardStart"]
 assert [len(state[k]) for k in ("bank1", "bank2", "high", "rom", "mainRAM")] == [
     0x1000, 0x1000, 0x2000, 0x3000, 0xC000
@@ -224,24 +266,45 @@ state["rom"][0x1234] = 0x75
 state.update(readRom=False, bank=1, writeProtected=True, prevIOAddr=0xC081)
 with open("language-card.json") as f:
     fixture = json.load(f)
+base_instructions = fixture["FirstInstructions"][:]
 fixture["BranchTargets"] = [0xD002]
 with open("language-card-entry.json", "w") as f:
     json.dump(fixture, f)
 fixture["BranchTargets"] = [0xD104]
-fixture["UpperOpcodes"].extend([[0xD100, 0xD0], [0xD102, 0xA9], [0xD104, 0x60]])
+fixture["FirstInstructions"].extend([
+    [0xD100, 0xD0, 0x02, 0xA9, False],
+    [0xD102, 0xA9, 0x00, 0x60, False],
+    [0xD104, 0x60, 0x00, 0x00, False],
+])
 with open("language-card-branch.json", "w") as f:
     json.dump(fixture, f)
-fixture["UpperOpcodes"] = fixture["UpperOpcodes"][:-3]
+fixture["FirstInstructions"][-3][4] = True
+with open("language-card-changed-branch.json", "w") as f:
+    json.dump(fixture, f)
+fixture["FirstInstructions"] = base_instructions[:]
 fixture["BranchTargets"] = [0xD100]
-fixture["UpperOpcodes"].append([0xFFFF, 0xA9])
+fixture["FirstInstructions"].extend([
+    [0xFFFF, 0xA9, 0x00, 0x00, False],
+    [0x3500, 0x8D, 0x00, 0x00, False],
+    [0x3503, 0x60, 0x00, 0x00, False],
+])
+fixture["generations"] = [dict(
+    regs=dict(pc=0x300, a=0, x=0, y=0, sp=0xff, status=0x20),
+    code=[dict(addr=0x3500, bytes=[0x8D, 0x00, 0x00, 0x60])],
+)]
 with open("language-card-wrap.json", "w") as f:
     json.dump(fixture, f)
-fixture["UpperOpcodes"].pop()
+fixture["FirstInstructions"] = base_instructions[:]
+fixture["generations"] = []
 fixture["BranchTargets"] = []
-fixture["UpperOpcodes"].extend([[0xD200, 0xA9], [0xD201, 0xEA], [0xD202, 0x60]])
+fixture["FirstInstructions"].extend([
+    [0xD200, 0xA9, 0xEA, 0x60, False],
+    [0xD201, 0xEA, 0x60, 0x00, False],
+    [0xD202, 0x60, 0x00, 0x00, False],
+])
 with open("language-card-join.json", "w") as f:
     json.dump(fixture, f)
-fixture["UpperOpcodes"] = fixture["UpperOpcodes"][:-3]
+fixture["FirstInstructions"] = base_instructions[:]
 fixture["BranchTargets"] = []
 fixture["LanguageCardStart"] = state
 with open("language-card-snapshot.json", "w") as f:
@@ -257,6 +320,39 @@ del fixture["LanguageCardStart"]
 with open("language-card-old.json", "w") as f:
     json.dump(fixture, f)
 fixture["LanguageCardStart"] = "power-on"
+legacy = dict(fixture)
+del legacy["FirstInstructions"]
+legacy["UpperOpcodes"] = [[0xD000, 0xA9]]
+with open("language-card-legacy.json", "w") as f:
+    json.dump(legacy, f)
+fixture["BranchTargets"] = [0x0303, 0xD100]
+fixture["FirstInstructions"] = [
+    [0x0300, 0xAD, 0x81, 0xC0, False],
+    [0xD100, 0x8D, 0x01, 0x03, False],
+    [0xD103, 0x60, 0x00, 0x00, False],
+] + base_instructions
+with open("language-card-cross-region.json", "w") as f:
+    json.dump(fixture, f)
+fixture["BranchTargets"] = [0x0302]
+fixture["FirstInstructions"] = [[0x0300, 0xA2, 0x41, 0x00, False]] + base_instructions
+with open("language-card-first-main.json", "w") as f:
+    json.dump(fixture, f)
+fixture["FirstInstructions"][0] = [0x0300, 0xAD, 0x81, 0xC0, False]
+fixture["FirstInstructions"].append([0x0300, 0xAD, 0x81, 0xC0, False])
+with open("language-card-duplicate.json", "w") as f:
+    json.dump(fixture, f)
+fixture["FirstInstructions"][-1] = [0x100000000, 0xAD, 0x81, 0xC0, False]
+with open("language-card-overflow.json", "w") as f:
+    json.dump(fixture, f)
+fixture["FirstInstructions"][-1] = [0x0301, 0xA9, 0, 0, 1]
+with open("language-card-invalid-flag.json", "w") as f:
+    json.dump(fixture, f)
+fixture["FirstInstructions"] = base_instructions[:]
+fixture["FirstInstructions"][0] = fixture["FirstInstructions"][0][:4]
+with open("language-card-old-instructions.json", "w") as f:
+    json.dump(fixture, f)
+fixture["FirstInstructions"] = base_instructions[:]
+fixture["LanguageCardStart"] = "power-on"
 fixture["BranchTargets"] = [0x3fff]
 regs = dict(pc=0x300, a=0, x=0, y=0, sp=0xff, status=0x20)
 fixture["generations"] = [
@@ -270,19 +366,47 @@ fixture["generations"] = [dict(regs=regs, code=[dict(addr=0xcffe, bytes=[0xad, 0
 with open("language-card-boundary.json", "w") as f:
     json.dump(fixture, f)
 PY
+$apple2tc language-card.b33 --simple-c --language-card \
+  --run-data=language-card-collected.json > language-card-generated.c
+cc -std=c11 -I../include -I. -c language-card-driver.c -o language-card-driver.o
 if $apple2tc language-card.b33 --simple-c --language-card --run-data=language-card-old.json \
     >language-card-error.out 2>&1; then
   echo "FAIL: accepted a recording without language-card startup state" >&2
   exit 1
 fi
 grep -q 'LanguageCardStart' language-card-error.out
-for what in mismatch malformed; do
+if $apple2tc language-card.b33 --simple-c --language-card --run-data=language-card-legacy.json \
+    >language-card-error.out 2>&1; then
+  echo "FAIL: accepted a recording without first-observed instructions" >&2
+  exit 1
+fi
+grep -q 'FirstInstructions' language-card-error.out
+for what in mismatch malformed duplicate overflow invalid-flag; do
   if $apple2tc language-card.b33 --simple-c --language-card \
       --run-data="language-card-$what.json" >language-card-error.out 2>&1; then
     echo "FAIL: accepted $what starting state" >&2
     exit 1
   fi
 done
+$apple2tc language-card.b33 --simple-c --language-card \
+  --run-data=language-card-old-instructions.json > /dev/null 2>language-card-error.out
+grep -q 'lacks operand-change data' language-card-error.out
+$apple2tc language-card.b33 --simple-c --language-card \
+  --run-data=language-card-cross-region.json > language-card-generated.c
+cc -std=c11 -I../include -I. -c language-card-driver.c -o language-card-driver.o
+c++ language-card-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
+  -o language-card-test
+./language-card-test cross-region-operand
+$apple2tc language-card.b33 --simple-c --language-card \
+  --run-data=language-card-first-main.json > language-card-generated.c
+grep -q '/\* \$0300 LDX \*/ s_x = update_nz(0x41);' language-card-generated.c
+cc -std=c11 -I../include -I. -c language-card-driver.c -o language-card-driver.o
+c++ language-card-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
+  -o language-card-test
+./language-card-test first-main-opcode
+$apple2tc language-card.b33 --simple-c --run-data=language-card-first-main.json \
+  > language-card-no-card.c
+grep -q '/\* \$0300 LDX \*/ s_x = update_nz(0x41);' language-card-no-card.c
 if $apple2tc language-card.b33 --simple-c --language-card \
     --run-data=language-card-boundary.json >language-card-error.out 2>&1; then
   echo "FAIL: accepted an instruction crossing the language-card boundary" >&2
@@ -302,10 +426,18 @@ c++ language-card-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.
 ./language-card-test branch-entry
 $apple2tc language-card.b33 --simple-c --language-card --run-data=language-card-branch.json \
   > language-card-generated.c
+grep -q '/\* \$D100 BNE \*/.*0xd104' language-card-generated.c
 cc -std=c11 -I../include -I. -c language-card-driver.c -o language-card-driver.o
 c++ language-card-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
   -o language-card-test
 ./language-card-test conditional-branch
+$apple2tc language-card.b33 --simple-c --language-card \
+  --run-data=language-card-changed-branch.json > language-card-generated.c
+grep -q '/\* \$D100 BNE \*/.*peek(0xd101)' language-card-generated.c
+cc -std=c11 -I../include -I. -c language-card-driver.c -o language-card-driver.o
+c++ language-card-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.a" \
+  -o language-card-test
+./language-card-test changed-branch
 $apple2tc language-card.b33 --simple-c --language-card --run-data=language-card-join.json \
   > language-card-generated.c
 grep -q 'case 0xd202:' language-card-generated.c
@@ -328,10 +460,14 @@ c++ language-card-driver.o "$bin/lib/a2host/liba2host.a" "$bin/lib/a2io/liba2io.
 "$bin/tests/a2io/language-card-generated-test"
 rm language-card.b33 language-card-generated.c language-card-driver.o language-card-test \
   language-card-error.out language-card-collect.out language-card-collected.json \
-  language-card-snapshot.json language-card-old.json language-card-mismatch.json \
+  language-card-snapshot.json language-card-old.json language-card-legacy.json language-card-mismatch.json \
   language-card-malformed.json language-card-overlap.json language-card-overlap.c \
   language-card-boundary.json language-card-keys.txt language-card-first.json \
-  language-card-entry.json language-card-branch.json language-card-join.json \
+  language-card-cross-region.json language-card-first-main.json language-card-duplicate.json \
+  language-card-overflow.json language-card-no-recording.c language-card-no-recording.o \
+  language-card-no-card.c language-card-invalid-flag.json language-card-old-instructions.json \
+  operand-observed.b33 operand-observed.json \
+  language-card-entry.json language-card-branch.json language-card-changed-branch.json language-card-join.json \
   language-card-wrap.json language-card-code-at.txt language-card-code-at.c
 
 # --inline-str: routines taking a NUL-terminated string after the JSR. Two

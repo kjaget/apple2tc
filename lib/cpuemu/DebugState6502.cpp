@@ -24,7 +24,7 @@ void DebugState6502::setModeCollect(Emu6502 *emu, unsigned int limit) {
   memWritten_.clear();
   memExecStart_.clear();
   memExecFull_.clear();
-  upperOpcodes_.clear();
+  firstInstructions_.clear();
   languageCardStart_.reset();
   generations_.clear();
   generations_.emplace_back(emu->getRegs());
@@ -65,7 +65,7 @@ void DebugState6502::printHistory() {
 void DebugState6502::clearCollectedData() {
   branchTargets_.clear();
   allBranches_.clear();
-  upperOpcodes_.clear();
+  firstInstructions_.clear();
   languageCardStart_.reset();
   generations_.clear();
 }
@@ -136,7 +136,7 @@ void DebugState6502::addRecord(const InstRecord &rec) {
 }
 
 static uint8_t debug_peek(Emu6502 *emu, uint16_t addr) {
-  return addr >= 0xD000 ? emu->getMainRAM()[addr] : emu->ram_peek(addr);
+  return emu->inspect(addr);
 }
 
 static inline ThreeBytes ram_peek3(Emu6502 *emu, uint16_t addr) {
@@ -277,10 +277,15 @@ static inline int getStackChange(CPUInstKind kind) {
 
 Emu6502::StopReason DebugState6502::collectData(Emu6502 *emu, uint16_t pc) {
   ThreeBytes b = ram_peek3(emu, pc);
-  if (pc >= 0xD000) {
-    auto &opcodes = upperOpcodes_[pc];
-    if (std::find(opcodes.begin(), opcodes.end(), b.d[0]) == opcodes.end())
-      opcodes.push_back(b.d[0]);
+  auto [first, inserted] = firstInstructions_.try_emplace(pc, ObservedInstruction{b});
+  if (!inserted && !first->second.operandChanged) {
+    CPUInst initial = decodeInst(pc, first->second.bytes);
+    for (unsigned i = 1; i < initial.size; ++i) {
+      if (b.d[i] != first->second.bytes.d[i]) {
+        first->second.operandChanged = true;
+        break;
+      }
+    }
   }
   CPUInst inst = decodeInst(pc, b);
   Emu6502::Regs regs = emu->getRegs();

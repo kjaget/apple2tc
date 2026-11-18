@@ -137,7 +137,9 @@ public:
   /// Read a 16-bit word from the RAM buffer. The RAM buffer is not necessarily
   /// what the CPU sees, as it may be overlapped by IO, etc.
   [[nodiscard]] uint16_t ram_peek16(uint16_t addr) {
-    return ram_peek(addr) + (ram_peek(addr + 1) << 8);
+    uint8_t lo = ram_peek(addr);
+    uint8_t hi = ram_peek(addr + 1);
+    return lo + (hi << 8);
   }
   /// Write a byte into the RAM buffer. This is not the same as writing it into
   /// the address space: no IO decoding is performed, etc.
@@ -159,13 +161,21 @@ public:
     // printf("peek: addr = %04X, value = %02X\n", addr, value);
     return value;
   }
+  /// Observe the CPU-visible byte without performing an I/O access.
+  uint8_t inspect(uint16_t addr) {
+    if (addr >= ioRangeStart_ && addr <= ioRangeEnd_)
+      return ioInspect(addr);
+    return ram_[addr];
+  }
   /// Read a 16-bit from memory, iospace, swoft switches, etc. Note that there
   //  /// coudl be side effects, so the method isn't const.
   /// Note that the type of the parameter is
   /// uint16_t,so when invoked with an integer expression, it will be truncated
   /// to 16 bits. This is deliberate.
   uint16_t peek16(uint16_t addr) {
-    return peek(addr) + (peek(addr + 1) << 8);
+    uint8_t lo = peek(addr);
+    uint8_t hi = peek(addr + 1);
+    return lo + (hi << 8);
   }
 
   /// Write a 16-bit into memory, iospace, swoft switches, etc.
@@ -180,6 +190,8 @@ public:
 protected:
   /// Perform a read in the IO range.
   virtual uint8_t ioPeek(uint16_t addr);
+  /// Observe an I/O read without side effects; override alongside ioPeek().
+  virtual uint8_t ioInspect(uint16_t addr);
   /// Perform a write in the IO range.
   virtual void ioPoke(uint16_t addr, uint8_t value);
 

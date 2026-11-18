@@ -14,6 +14,10 @@ uint8_t EmuApple2::ioPeek(uint16_t addr) {
   return a2_io_peek(&io_, addr, getCycles());
 }
 
+uint8_t EmuApple2::ioInspect(uint16_t addr) {
+  return a2_io_inspect(&io_, addr, getCycles());
+}
+
 void EmuApple2::ioPoke(uint16_t addr, uint8_t value) {
   a2_io_poke(&io_, addr, value, getCycles());
 }

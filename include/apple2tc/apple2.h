@@ -62,6 +62,7 @@ public:
 protected:
   /// Perform a read in the IO range.
   uint8_t ioPeek(uint16_t addr) override;
+  uint8_t ioInspect(uint16_t addr) override;
   /// Perform a write in the IO range.
   void ioPoke(uint16_t addr, uint8_t value) override;
 

@@ -299,8 +299,8 @@ struct RuntimeData {
   std::vector<uint16_t> branchTargets;
   /// All branches indexed by address of the origin.
   std::unordered_map<uint16_t, std::vector<uint16_t>> allBranches{};
-  /// Opcode variants observed at instruction addresses in $D000-$FFFF.
-  std::optional<std::map<uint16_t, uint8_t>> upperOpcodes{};
+  /// First-observed instruction bytes and operand changes, indexed by CPU address.
+  std::optional<std::map<uint16_t, ObservedInstruction>> firstInstructions{};
   std::optional<LanguageCardStart> languageCardStart{};
   /// All executable generations.
   std::vector<Generation> generations;
@@ -409,6 +409,10 @@ public:
     languageCard_ = enabled;
   }
 
+  void setUseFirstObserved(bool enabled) {
+    useFirstObserved_ = enabled;
+  }
+
   /// Record the inline-string routines declared with `--inline-str`.
   void setInlineStr(std::vector<uint16_t> addrs) {
     inlineStr_ = std::set<uint16_t>(addrs.begin(), addrs.end());
@@ -503,7 +507,11 @@ private:
   AsmBlock *addWork(uint16_t addr, AsmBlock **curBlock);
 
   void identifyAsmBlocks();
-  bool recordedUpper(uint16_t addr) const;
+  bool canDecodeCode(uint16_t addr) const {
+    return !recordedOnly_[addr] || observedCode_.count(addr);
+  }
+  std::map<uint16_t, ThreeBytes> observedCode_{};
+  std::vector<bool> recordedOnly_ = std::vector<bool>(0x10000, false);
 
   void printAsmCodeRange(const AsmBlock &block, std::optional<uint32_t> &lastAddr);
   void printAsmDataRange(Range r);
@@ -530,6 +538,7 @@ private:
   /// Optional path to a JSON file with runtime data.
   std::string runDataPath_;
   bool languageCard_ = false;
+  bool useFirstObserved_ = false;
 
   /// Optional runtime execution data.
   std::unique_ptr<RuntimeData> runData_;

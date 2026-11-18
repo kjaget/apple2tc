@@ -103,20 +103,43 @@ std::unique_ptr<RuntimeData> RuntimeData::load(const std::string &path) {
 
   res->branchTargets = static_cast<std::vector<uint16_t>>(root["BranchTargets"]);
 
-  it = root.find("UpperOpcodes");
+  it = root.find("FirstInstructions");
   if (it != root.end()) {
     if (!it->is_array())
-      throw std::runtime_error("Invalid UpperOpcodes in " + path);
-    res->upperOpcodes.emplace();
+      throw std::runtime_error("Invalid FirstInstructions in " + path);
+    res->firstInstructions.emplace();
+    bool missingOperandChanges = false;
     for (const auto &entry : *it) {
-      if (!entry.is_array() || entry.size() != 2)
-        throw std::runtime_error("Invalid UpperOpcodes entry in " + path);
+      if (!entry.is_array() || (entry.size() != 4 && entry.size() != 5))
+        throw std::runtime_error("Invalid FirstInstructions entry in " + path);
+      for (size_t i = 0; i < 4; ++i) {
+        const auto &value = entry[i];
+        if (!value.is_number_integer() || value < 0)
+          throw std::runtime_error("Invalid FirstInstructions value in " + path);
+      }
+      if (entry[0] > 0xFFFF || entry[1] > 0xFF || entry[2] > 0xFF || entry[3] > 0xFF)
+        throw std::runtime_error("Invalid FirstInstructions value in " + path);
+      if (entry.size() == 5 && !entry[4].is_boolean())
+        throw std::runtime_error("Invalid FirstInstructions operand-change flag in " + path);
+      missingOperandChanges |= entry.size() == 4;
       unsigned addr = entry[0].get<unsigned>();
-      unsigned opcode = entry[1].get<unsigned>();
-      if (addr < 0xD000 || addr > 0xFFFF || opcode > 0xFF)
-        throw std::runtime_error("Invalid UpperOpcodes address or opcode in " + path);
-      res->upperOpcodes->emplace((uint16_t)addr, (uint8_t)opcode);
+      unsigned op = entry[1].get<unsigned>();
+      unsigned lo = entry[2].get<unsigned>();
+      unsigned hi = entry[3].get<unsigned>();
+      bool operandChanged = entry.size() == 5 && entry[4].get<bool>();
+      if (!res->firstInstructions
+               ->emplace(
+                   (uint16_t)addr,
+                   ObservedInstruction{
+                       ThreeBytes{{(uint8_t)op, (uint8_t)lo, (uint8_t)hi}}, operandChanged})
+               .second)
+        throw std::runtime_error("Invalid or duplicate FirstInstructions entry in " + path);
     }
+    if (missingOperandChanges)
+      fprintf(stderr,
+              "warning: FirstInstructions in %s lacks operand-change data; "
+              "recollect to detect changes missed by static analysis\n",
+              path.c_str());
   }
 
   it = root.find("Branches");

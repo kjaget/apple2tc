@@ -486,8 +486,8 @@ void a2_io_tick(a2_iostate_t *io, unsigned cycles) {
   advance_clock(io, cycles);
 }
 
-uint8_t a2_io_peek(a2_iostate_t *io, uint16_t addr, unsigned cycles) {
-  if (addr >= 0xC0E0 && addr <= 0xC0EF)
+static uint8_t io_peek_impl(a2_iostate_t *io, uint16_t addr, unsigned cycles, bool inspect) {
+  if (!inspect && addr >= 0xC0E0 && addr <= 0xC0EF)
     printf("[%u] DISK PEEK $%04X\n", cycles, addr);
   advance_clock(io, cycles);
 
@@ -653,10 +653,28 @@ uint8_t a2_io_peek(a2_iostate_t *io, uint16_t addr, unsigned cycles) {
   default:
     break;
   }
-  fprintf(stderr, "[%u] Unsupported IO location read $%04X\n", cycles, addr);
-  fprintf(stdout, "[%u] Unsupported IO location read $%04X\n", cycles, addr);
+  if (!inspect) {
+    fprintf(stderr, "[%u] Unsupported IO location read $%04X\n", cycles, addr);
+    fprintf(stdout, "[%u] Unsupported IO location read $%04X\n", cycles, addr);
+  }
 
   return 0;
+}
+
+uint8_t a2_io_peek(a2_iostate_t *io, uint16_t addr, unsigned cycles) {
+  return io_peek_impl(io, addr, cycles, false);
+}
+
+uint8_t a2_io_inspect(const a2_iostate_t *io, uint16_t addr, unsigned cycles) {
+  if (addr >= 0xD000)
+    return a2_language_card_peek(&io->language_card, addr - 0xD000);
+  if (addr >= 0xC600 && addr <= 0xC6FF &&
+      (io->disk2.drive[0].mounted || io->disk2.drive[1].mounted))
+    return a2_disk2_rom_peek(addr - 0xC600);
+  a2_iostate_t copy = *io;
+  copy.spkr_cb = NULL;
+  copy.debug = 0;
+  return io_peek_impl(&copy, addr, cycles, true);
 }
 
 void a2_io_poke(a2_iostate_t *io, uint16_t addr, uint8_t value, unsigned cycles) {

@@ -60,15 +60,10 @@ AsmBlock::InstIterator &AsmBlock::InstIterator::operator++() {
   return *this;
 }
 
-bool Disas::recordedUpper(uint16_t addr) const {
-  return languageCard_ && addr >= 0xD000 && runData_ && runData_->upperOpcodes &&
-         runData_->upperOpcodes->count(addr);
-}
-
 CPUInst Disas::decodeCode(uint16_t addr) const {
-  // The recorded opcode is fixed; upper-memory operands are read at runtime.
-  if (recordedUpper(addr))
-    return decodeInst(addr, ThreeBytes{{runData_->upperOpcodes->at(addr), 0, 0}});
+  auto it = observedCode_.find(addr);
+  if (it != observedCode_.end())
+    return decodeInst(addr, it->second);
   return decodeInst(addr, peek3(addr));
 }
 
@@ -211,14 +206,13 @@ void Disas::identifyAsmBlocks() {
 
     uint32_t addr = block->addr();
     for (;;) {
-      if (languageCard_ && block->addr() < 0xD000 && addr >= 0xD000) {
+      if (addr < 0x10000 && recordedOnly_[block->addr()] != recordedOnly_[addr]) {
         block->setEndAddress(addr);
         AsmBlock *next = addWork((uint16_t)addr, nullptr);
         block->finish(next, nullptr);
         break;
       }
-      if (languageCard_ && addr >= 0xD000 && addr < 0x10000 &&
-          !recordedUpper((uint16_t)addr)) {
+      if (addr < 0x10000 && !canDecodeCode((uint16_t)addr)) {
         // Keep a fall-through target for the CFG, but do not generate code for
         // an upper-memory address absent from the recording.
         if (addr == block->addr()) {
@@ -244,11 +238,12 @@ void Disas::identifyAsmBlocks() {
       }
 
       CPUInst inst = decodeCode((uint16_t)addr);
-      if (languageCard_ && addr < 0xD000 && addr + inst.size > 0xD000)
+      if (addr + inst.size <= 0x10000 &&
+          recordedOnly_[addr] != recordedOnly_[addr + inst.size - 1])
         throw std::runtime_error(format(
             "--language-card does not support an instruction crossing $D000 at $%04X", addr));
+      const bool recordedOnly = recordedOnly_[addr];
       addr += inst.size;
-      const bool upper = languageCard_ && addr - inst.size >= 0xD000;
       if (inst.isInvalid()) {
         fprintf(stderr, "warning: invalid instruction at $%04X\n", addr - 1);
         block->setEndAddress(addr);
@@ -258,9 +253,8 @@ void Disas::identifyAsmBlocks() {
 
       if (inst.kind == CPUInstKind::JMP) {
         block->setEndAddress(addr);
-        AsmBlock *branch = !upper && inst.addrMode == CPUAddrMode::Abs
-                               ? addWork(inst.operand, &block)
-                               : nullptr;
+        AsmBlock *branch =
+            inst.addrMode == CPUAddrMode::Abs ? addWork(inst.operand, &block) : nullptr;
         block->finish(nullptr, branch);
         break;
       } else if (inst.kind == CPUInstKind::JSR) {
@@ -270,15 +264,14 @@ void Disas::identifyAsmBlocks() {
         // after the terminator rather than at `addr`. Tracing `addr` instead is
         // what decodes the first byte of a string as an instruction.
         AsmBlock *fall = addWork(
-            !upper && inlineStr_.count(inst.operand) ? inlineStrContinuation(addr) : addr,
-            nullptr);
-        AsmBlock *branch = upper ? nullptr : addWork(inst.operand, &block);
+            inlineStr_.count(inst.operand) ? inlineStrContinuation(addr) : addr, nullptr);
+        AsmBlock *branch = addWork(inst.operand, &block);
         block->finish(fall, branch);
         break;
       } else if (inst.addrMode == CPUAddrMode::Rel) {
         block->setEndAddress(addr);
         AsmBlock *fall = addWork(addr, nullptr);
-        AsmBlock *branch = upper ? nullptr : addWork(inst.operand, &block);
+        AsmBlock *branch = addWork(inst.operand, &block);
         block->finish(fall, branch);
         break;
       } else if (inst.kind == CPUInstKind::BRK) {
@@ -288,7 +281,7 @@ void Disas::identifyAsmBlocks() {
         addWork(addr, nullptr);
         if (languageCard_)
           addWork((uint16_t)(addr - inst.size + 2), nullptr);
-        AsmBlock *branch = upper ? nullptr : addWork(peek16(A2_IRQ_VEC), &block);
+        AsmBlock *branch = recordedOnly ? nullptr : addWork(peek16(A2_IRQ_VEC), &block);
         block->finish(nullptr, branch, true);
         break;
       } else if (inst.kind == CPUInstKind::RTS || inst.kind == CPUInstKind::RTI) {
@@ -299,7 +292,7 @@ void Disas::identifyAsmBlocks() {
 
       // If we wrapped around.
       if (addr >= 0x10000) {
-        block->setEndAddress(upper ? addr : 0x10000);
+        block->setEndAddress(recordedOnly ? addr : 0x10000);
         block->finish(nullptr, nullptr, true);
         break;
       }
@@ -371,10 +364,10 @@ void Disas::validateCodeAt() const {
     // means "ends in an invalid instruction". Blocks legitimately end that way
     // when real code runs into undecodable bytes -- past a BRK, or at the end
     // of the binary -- and a warning that fires on good input gets ignored.
-    if (languageCard_ && edge.target >= 0xD000) {
-      if (!runData_->upperOpcodes->count(edge.target))
+    if (recordedOnly_[edge.target]) {
+      if (!canDecodeCode(edge.target))
         throw std::runtime_error(format(
-            "--code-at: upper-memory target $%04X was not recorded", (unsigned)edge.target));
+            "--code-at: target $%04X was not recorded", (unsigned)edge.target));
     } else {
       for (auto [addr, inst] : targetBlock->instructions(this)) {
         if (inst.kind == CPUInstKind::INVALID)
@@ -387,10 +380,10 @@ void Disas::validateCodeAt() const {
       }
     }
 
-    if (languageCard_ && edge.origin >= 0xD000) {
-      auto it = runData_->upperOpcodes->find(edge.origin);
-      if (it != runData_->upperOpcodes->end()) {
-        CPUOpcode inst = decodeOpcode(it->second);
+    if (recordedOnly_[edge.origin]) {
+      auto it = observedCode_.find(edge.origin);
+      if (it != observedCode_.end()) {
+        CPUOpcode inst = decodeOpcode(it->second.d[0]);
         if (instIsBranch(inst.kind, inst.addrMode) && inst.kind != CPUInstKind::BRK)
           continue;
       }
@@ -431,10 +424,23 @@ void Disas::run(bool noGenerations) {
   if (!runDataPath_.empty())
     runData_ = RuntimeData::load(runDataPath_);
 
+  const bool hasRecording = runData_ != nullptr;
+  if (languageCard_ && !runData_) {
+    runData_ = std::make_unique<RuntimeData>();
+    runData_->languageCardStart.emplace();
+    runData_->languageCardStart->powerOn = true;
+  }
   if (languageCard_ &&
-      (!runData_ || !runData_->upperOpcodes || !runData_->languageCardStart))
+      (!runData_->languageCardStart || (hasRecording && !runData_->firstInstructions)))
     throw std::runtime_error(
-        "--language-card requires a recording with UpperOpcodes and LanguageCardStart");
+        "--language-card requires FirstInstructions and LanguageCardStart");
+  if (languageCard_) {
+    if (hasRecording)
+      std::fill(recordedOnly_.begin() + 0xD000, recordedOnly_.end(), true);
+  }
+  if (useFirstObserved_ && runData_ && runData_->firstInstructions)
+    for (const auto &[addr, instruction] : *runData_->firstInstructions)
+      observedCode_.emplace(addr, instruction.bytes);
   if (languageCard_ && !runData_->languageCardStart->powerOn) {
     const auto &initialRAM = runData_->languageCardStart->mainRAM;
     for (const auto &range : memRanges_)
@@ -531,21 +537,21 @@ void Disas::run(bool noGenerations) {
     identifyAsmBlocks();
   }
 
-  if (languageCard_) {
+  if (!observedCode_.empty()) {
     for (const auto &branch : runData_->allBranches)
       for (uint16_t target : branch.second)
-        if (target >= 0xD000)
+        if (recordedOnly_[target] || observedCode_.count(target))
           addWork(target, nullptr);
 
     // Overlapping instruction streams can have multiple fall-through edges
     // into the same address, which must remain a block entry.
     std::map<uint16_t, unsigned> predecessors;
-    for (const auto &entry : *runData_->upperOpcodes) {
+    for (const auto &entry : observedCode_) {
       uint16_t pc = entry.first;
       CPUInst inst = decodeCode(pc);
       uint32_t next = (uint32_t)pc + inst.size;
       if (!inst.isInvalid() && !instIsBranch(inst.kind, inst.addrMode) && next < 0x10000 &&
-          recordedUpper((uint16_t)next))
+          observedCode_.count((uint16_t)next))
         ++predecessors[(uint16_t)next];
     }
     for (const auto &[pc, count] : predecessors)
@@ -557,11 +563,11 @@ void Disas::run(bool noGenerations) {
     // without splitting blocks at every sequential instruction.
     std::vector<bool> decodedStarts(0x10000, false);
     for (const auto &[addr, block] : asmBlocks_)
-      if (addr >= 0xD000 && recordedUpper(addr))
+      if (observedCode_.count(addr))
         for (const auto &entry : block.instructions(this))
           decodedStarts[entry.first] = true;
 
-    for (const auto &entry : *runData_->upperOpcodes) {
+    for (const auto &entry : observedCode_) {
       uint16_t pc = entry.first;
       if (decodedStarts[pc])
         continue;
@@ -581,12 +587,9 @@ void Disas::run(bool noGenerations) {
 
   // Collect all data labels.
   for (const auto &block : asmBlocks_) {
-    if (languageCard_ && block.first >= 0xD000 && !recordedUpper(block.first))
+    if (!canDecodeCode(block.first))
       continue;
     for (auto [addr, inst] : block.second.instructions(this)) {
-      // The decoded upper-memory operands are placeholders, not addresses.
-      if (languageCard_ && addr >= 0xD000)
-        continue;
       if (instAccessesData(inst.addrMode)) {
         // Can we reason about the operand at all?
         if (operandIsEA(inst.addrMode)) {
@@ -620,10 +623,10 @@ void Disas::run(bool noGenerations) {
 std::vector<bool> Disas::codeCoverage() const {
   std::vector<bool> covered(0x10000, false);
   for (const auto &[addr, block] : asmBlocks_) {
-    if (languageCard_ && addr >= 0xD000 && !recordedUpper(addr))
+    if (!canDecodeCode(addr))
       continue;
-    for (uint32_t a = block.addr(); a < block.endAddr() && a < 0x10000; ++a)
-      covered[a] = true;
+    for (uint32_t a = block.addr(); a < block.endAddr(); ++a)
+      covered[(uint16_t)a] = true;
   }
   return covered;
 }

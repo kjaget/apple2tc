@@ -80,6 +80,9 @@ protected:
   uint8_t ioPeek(uint16_t addr) override {
     return io_peek(addr);
   }
+  uint8_t ioInspect(uint16_t addr) override {
+    return io_inspect(addr);
+  }
   void ioPoke(uint16_t addr, uint8_t value) override {
     io_poke(addr, value);
   }

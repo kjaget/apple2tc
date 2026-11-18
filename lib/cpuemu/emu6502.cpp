@@ -962,6 +962,10 @@ uint8_t Emu6502::ioPeek(uint16_t addr) {
   return 0;
 }
 
+uint8_t Emu6502::ioInspect(uint16_t addr) {
+  return 0;
+}
+
 void Emu6502::ioPoke(uint16_t addr, uint8_t value) {
   ioPeek(addr);
 }

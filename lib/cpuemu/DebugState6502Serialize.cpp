@@ -83,11 +83,13 @@ void DebugState6502::finishCollection(const Emu6502 *emu, std::ostream &os) {
     root["Branches"] = branches;
   }
 
-  json upperOpcodes = json::array();
-  for (const auto &[addr, opcodes] : upperOpcodes_)
-    for (uint8_t opcode : opcodes)
-      upperOpcodes.push_back({addr, opcode});
-  root["UpperOpcodes"] = std::move(upperOpcodes);
+  json firstInstructions = json::array();
+  for (const auto &[addr, instruction] : firstInstructions_) {
+    const auto &bytes = instruction.bytes;
+    firstInstructions.push_back(
+        {addr, bytes.d[0], bytes.d[1], bytes.d[2], instruction.operandChanged});
+  }
+  root["FirstInstructions"] = std::move(firstInstructions);
   if (languageCardStart_) {
     const auto &card = languageCardStart_->card;
     root["LanguageCardStart"] = {

@@ -153,6 +153,11 @@ struct ThreeBytes {
   uint8_t d[3];
 };
 
+struct ObservedInstruction {
+  ThreeBytes bytes;
+  bool operandChanged = false;
+};
+
 /// Formatted fields of a decoded instruction for easy printing.
 struct FormattedInst {
   /// Up to three instruction bytes as hex numbers.

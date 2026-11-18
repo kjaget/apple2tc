@@ -135,7 +135,7 @@ void Disas::printSimpleC(FILE *f) {
   for (auto it = asmBlocks_.begin(), end = asmBlocks_.end(); it != end;) {
     const AsmBlock &block = it->second;
     ++it;
-    if (languageCard_ && block.addr() >= 0xD000 && !recordedUpper(block.addr()))
+    if (!canDecodeCode(block.addr()))
       continue;
     const AsmBlock *nextBlock = it != end ? &it->second : nullptr;
     printSimpleCRange(f, block, nextBlock);
@@ -164,7 +164,8 @@ void Disas::printSimpleCRange(FILE *f, const AsmBlock &block, const AsmBlock * /
 
   bool fall = false;
   for (const auto [addr, inst] : block.instructions(this))
-    fall = printSimpleCInst(f, addr, inst, languageCard_ && addr >= 0xD000);
+    fall = printSimpleCInst(
+        f, addr, inst, languageCard_ || (runData_ && runData_->firstInstructions));
 
   if (fall) {
     const AsmBlock *fallBlock = block.getFallBlock();
@@ -179,20 +180,28 @@ void Disas::printSimpleCRange(FILE *f, const AsmBlock &block, const AsmBlock * /
 
 bool Disas::printSimpleCInst(FILE *f, uint16_t pc, CPUInst inst, bool dynamicOperand) {
   bool fall = true;
-  scSelfModOperand_ = dynamicOperand;
+  scSelfModOperand_ = false;
   scDynamicOperand_ = dynamicOperand;
   scPC_ = pc;
 
   if (selfModifers_.count(pc))
     fprintf(f, "      // WARNING: performs self modification.\n");
 
+  if (runData_ && runData_->firstInstructions) {
+    auto it = runData_->firstInstructions->find(pc);
+    if (it != runData_->firstInstructions->end() && it->second.operandChanged) {
+      fprintf(f, "      // WARNING: operand self modification.\n");
+      scSelfModOperand_ = true;
+    }
+  }
   for (unsigned i = 0, e = inst.size; i != e; ++i) {
     if (!checkSelfModified((uint16_t)(pc + i)))
       continue;
     if (i == 0) {
       fprintf(f, "      // WARNING: opcode self modification.\n");
     } else {
-      fprintf(f, "      // WARNING: operand self modification.\n");
+      if (!scSelfModOperand_)
+        fprintf(f, "      // WARNING: operand self modification.\n");
       scSelfModOperand_ = true;
       break;
     }

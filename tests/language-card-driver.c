@@ -28,6 +28,43 @@ int main(int argc, char **argv) {
   if (argc > 1) {
     if (strcmp(argv[1], "changed-main-opcode") == 0) {
       poke(0x0300, 0xFF);
+    } else if (strcmp(argv[1], "observed-operands") == 0) {
+      s_pc = 0x0300;
+      s_sp = 0xFF;
+      run_emulated(1000);
+      check(ram_peek(0x0200), 0x11, "initial low operand");
+      check(ram_peek(0x0201), 0x22, "indirectly modified low operand");
+      check(ram_peek(0x0202), 0x11, "restored low operand");
+      check(ram_peek(0x0203), 0x11, "bank 2 operand");
+      check(ram_peek(0x0204), 0x22, "bank 1 operand");
+      check(ram_peek(0x0205), 0x45, "initial absolute operand");
+      check(ram_peek(0x0206), 0x67, "modified high operand byte");
+      return 0;
+    } else if (strcmp(argv[1], "first-main-opcode") == 0) {
+      ram_poke(0x0301, 0x57);
+      s_x = 0;
+      s_pc = 0x0300;
+      run_emulated(2);
+      check(s_x, 0x41, "first observed lower-memory opcode and operand");
+      check(s_pc, 0x0302, "first observed lower-memory instruction size");
+      return 0;
+    } else if (strcmp(argv[1], "cross-region-operand") == 0) {
+      io_peek(0xC083);
+      io_peek(0xC083);
+      poke(0xD101, 0x01);
+      poke(0xD102, 0x03);
+      s_a = 0x80;
+      s_sp = 0xFF;
+      push16(0x4566);
+      s_pc = 0xD100;
+      run_emulated(10);
+      check(ram_peek(0x0301), 0x80, "upper code changed lower operand");
+      poke(0x0300, 0xFF);
+      s_pc = 0x0300;
+      s_remaining_cycles = 0;
+      run_emulated(4);
+      check(a2host_io()->prev_io_addr, 0xC080, "lower instruction uses changed operand");
+      return 0;
     } else if (strcmp(argv[1], "branch-entry") == 0) {
       io_peek(0xC083);
       io_peek(0xC083);
@@ -41,14 +78,16 @@ int main(int argc, char **argv) {
       check(ram_peek(0x0208), 0x79, "recorded branch into upper block");
       check(s_pc, 0x4567, "upper block return");
       return 0;
-    } else if (strcmp(argv[1], "conditional-branch") == 0) {
+    } else if (strcmp(argv[1], "conditional-branch") == 0 ||
+               strcmp(argv[1], "changed-branch") == 0) {
+      bool changed = strcmp(argv[1], "changed-branch") == 0;
       io_peek(0xC083);
       io_peek(0xC083);
-      poke(0xD101, 2);
+      poke(0xD101, changed ? 4 : 2);
       s_pc = 0xD100;
       s_status &= ~STATUS_Z;
       run_emulated(2);
-      check(s_pc, 0xD104, "taken upper-memory branch target");
+      check(s_pc, changed ? 0xD106 : 0xD104, "taken upper-memory branch target");
       s_remaining_cycles = 0;
       s_pc = 0xD100;
       s_status |= STATUS_Z;

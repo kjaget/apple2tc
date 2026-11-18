@@ -66,17 +66,23 @@ tools/apple2tc/apple2tc --simple-c -O3 --language-card \
 ```
 
 Use the same input binary and any keyboard replay for recording and execution.
-Older recordings lack the necessary startup state and upper-memory opcodes.
-This mode supports simple C only, and the recording must cover each
-upper-memory instruction address that will execute. The first recorded opcode
-at each address is hard-coded; later opcode changes are not supported or
-detected. Older recordings sorted upper opcode variants rather than preserving
-their first occurrence; make a new recording to preserve that order. Recollect
-with the current interpreter to capture control-transfer destinations, including
-RTI continuations, needed as upper-memory block entries. Because upper-memory
-operands are dynamic, writes from upper-memory code to lower-memory instruction
-operands are not generally detected by static self-modification analysis. Other
-device state is not restored from the recording, so collect from startup.
+When a recording is provided, it must include the startup state and
+first-observed instructions. Older recordings must be recollected. Without a
+recording, the generator assumes power-on state and uses the supplied or
+built-in ROM; it cannot discover code loaded into language-card RAM later.
+This mode supports simple C only, and a recording must cover each upper-memory
+instruction address that will execute. The first recorded opcode at each
+address is hard-coded; later opcode changes are not supported or detected.
+Record with the current interpreter to capture control-transfer destinations,
+including RTI continuations, needed as upper-memory block entries. Current
+recordings also capture the first instruction bytes at every executed PC and
+whether an operand was observed to change. Generated operands are read
+dynamically only when static analysis detects a write to their bytes or the
+recording observes a different operand on a later execution. Recordings made
+before operand-change tracking should be recollected; they cannot detect changes
+missed by static analysis. Indirect writes or bank changes not exercised during
+collection can still be missed. Other device state is not restored from the
+recording, so collect from startup.
 
 EOS remains a work in progress: in the 5,000-frame no-input recording above,
 the opcode at `$A806` changes during execution. This is not yet supported,

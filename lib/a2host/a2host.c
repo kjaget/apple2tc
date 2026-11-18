@@ -387,6 +387,10 @@ uint8_t io_peek(uint16_t addr) {
   return a2_io_peek(&io_, addr, get_cycles());
 }
 
+uint8_t io_inspect(uint16_t addr) {
+  return a2_io_inspect(&io_, addr, get_cycles());
+}
+
 void io_poke(uint16_t addr, uint8_t value) {
   a2_io_poke(&io_, addr, value, get_cycles());
 }

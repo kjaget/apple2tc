@@ -6,6 +6,13 @@
 #include <stdlib.h>
 
 static a2_iostate_t io;
+static unsigned speaker_accesses;
+
+static void speaker(void *ctx, unsigned cycles) {
+  (void)ctx;
+  (void)cycles;
+  ++speaker_accesses;
+}
 
 uint8_t io_peek(uint16_t addr) {
   return a2_io_peek(&io, addr, get_cycles());
@@ -36,8 +43,29 @@ int main(void) {
   rom[0x2BB3] = 0xA2;
   a2_io_init(&io);
   a2_language_card_load_rom(&io.language_card, rom, sizeof(rom));
+  a2_io_set_spkr_cb(&io, NULL, speaker);
   reset_regs();
 
+  io.latch = 0x41;
+  io.strobe = true;
+  io.prev_io_addr = 0xC081;
+  check(a2_io_inspect(&io, 0xC000, 42), 0xC1, "inspect keyboard");
+  check(a2_io_inspect(&io, 0xC010, 42), 0, "inspect keyboard strobe");
+  check(a2_io_inspect(&io, 0xC030, 42), 0, "inspect speaker");
+  check(a2_io_inspect(&io, 0xC083, 42), 0, "inspect language-card switch");
+  check(a2_io_inspect(&io, 0xD000, 42), 0xA1, "inspect mapped ROM");
+  if (!io.strobe || io.prev_io_addr != 0xC081 || io.clock != 0 ||
+      !io.language_card.banked_memory_read_rom || speaker_accesses) {
+    fprintf(stderr, "inspection changed device state\n");
+    return 1;
+  }
+  io.gameport.expiry[0] = 42;
+  check(a2_io_inspect(&io, 0xC064, 41), 0x80, "inspect active paddle");
+  check(a2_io_inspect(&io, 0xC064, 42), 0, "inspect expired paddle");
+  if (io.clock != 0 || io.prev_io_addr != 0xC081) {
+    fprintf(stderr, "paddle inspection changed device state\n");
+    return 1;
+  }
   check(peek(0xD000), 0xA1, "initial ROM bank");
   check(peek(0xFBB3), 0xA2, "initial upper ROM");
 

@@ -65,7 +65,7 @@ void a2_language_card_load_rom(a2_language_card_t *lc, const uint8_t *rom, uint1
 // Writes always go to RAM, even if the ROM is currently selected for reading.
 // RAM is divided into two banks (bank1 and bank2) and a high RAM area. The currently active bank is selected
 // by banked_memory_ram_select.
-uint8_t a2_language_card_peek(a2_language_card_t *lc, unsigned offset) {
+uint8_t a2_language_card_peek(const a2_language_card_t *lc, unsigned offset) {
   if (lc->banked_memory_read_rom) {
     return lc->rom[offset];
   }
@@ -81,7 +81,7 @@ uint8_t a2_language_card_peek(a2_language_card_t *lc, unsigned offset) {
   fprintf(stderr, "a2_language_card_peek: invalid banked_memory_ram_select %d\n", lc->banked_memory_ram_select);
 }
 
-// Like above, except write a bytes to RAM at the given offset from the start
+// Like above, except write a byte to RAM at the given offset from the start
 // of the langauge card memory region $D000-$FFFF. Writes always go to RAM,
 // respecting the current bank and write protection.
 void a2_language_card_poke(a2_language_card_t *lc, unsigned offset, uint8_t value) {

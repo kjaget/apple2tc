@@ -363,6 +363,8 @@ void a2_io_set_paddle(a2_iostate_t *io, unsigned n, uint8_t value);
 /// Press or release pushbutton \p n (0-2).
 void a2_io_set_button(a2_iostate_t *io, unsigned n, bool down);
 uint8_t a2_io_peek(a2_iostate_t *io, uint16_t addr, unsigned cycles);
+/// Return the value of a CPU read without changing device state.
+uint8_t a2_io_inspect(const a2_iostate_t *io, uint16_t addr, unsigned cycles);
 void a2_io_poke(a2_iostate_t *io, uint16_t addr, uint8_t value, unsigned cycles);
 
 /// Advance the extended clock without performing an IO access.
@@ -426,7 +428,7 @@ uint16_t a2_io_get_text_page_offset(const a2_iostate_t *io);
 
 void a2_language_card_init(a2_language_card_t *lc);
 void a2_language_card_load_rom(a2_language_card_t *lc, const uint8_t *rom, uint16_t rom_size);
-uint8_t a2_language_card_peek(a2_language_card_t *lc, unsigned offset);
+uint8_t a2_language_card_peek(const a2_language_card_t *lc, unsigned offset);
 void a2_language_card_poke(a2_language_card_t *lc, unsigned offset, uint8_t value);
 /// Write bytes to whichever language-card storage is currently visible to reads. Used for
 /// setting initial state of memory from .b33 file or similar source

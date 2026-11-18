@@ -213,8 +213,8 @@ private:
   /// All branches.
   std::unordered_set<BranchDesc, HashBranchDesc> allBranches_{};
 
-  /// Opcodes observed at each address in the language-card window, in execution order.
-  std::map<uint16_t, std::vector<uint8_t>> upperOpcodes_{};
+  /// First bytes and observed operand changes at each instruction address.
+  std::map<uint16_t, ObservedInstruction> firstInstructions_{};
   struct LanguageCardStart {
     a2_language_card_t card;
     uint16_t prevIOAddr;

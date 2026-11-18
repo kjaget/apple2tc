@@ -201,15 +201,6 @@ int main(int argc, char **argv) {
       continue;
     }
 
-    if (languageCard && action != Action::GenSimpleC) {
-      fprintf(stderr, "--language-card requires --simple-c\n");
-      return 2;
-    }
-    if (languageCard && !coveragePath.empty()) {
-      fprintf(stderr, "--coverage is not supported with --language-card\n");
-      return 2;
-    }
-
     fprintf(stderr, "Too many arguments\n");
     printHelp();
     return 1;
@@ -221,12 +212,22 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  if (languageCard && action != Action::GenSimpleC) {
+    fprintf(stderr, "--language-card requires --simple-c\n");
+    return 2;
+  }
+  if (languageCard && !coveragePath.empty()) {
+    fprintf(stderr, "--coverage is not supported with --language-card\n");
+    return 2;
+  }
+
   // Load the input binary.
   auto [binary, start] = loadInputBinary(inputPath.c_str(), rom);
 
   try {
     auto dis = std::make_shared<Disas>(runDataPath);
     dis->setLanguageCard(languageCard);
+    dis->setUseFirstObserved(action == Action::GenSimpleC);
     if (!codeAtPath.empty())
       dis->setCodeAt(loadCodeAt(codeAtPath));
     if (!inlineStrPath.empty()) {

@@ -35,6 +35,7 @@ extern "C" {
 
 /// Read the $C000-$CFFF soft-switch range.
 uint8_t io_peek(uint16_t addr);
+uint8_t io_inspect(uint16_t addr);
 /// Write the $C000-$CFFF soft-switch range.
 void io_poke(uint16_t addr, uint8_t value);
 

@@ -168,11 +168,13 @@ static inline void poke(uint16_t addr, uint8_t value) {
   }
 }
 static uint16_t peek16(uint16_t addr) {
-  return peek(addr) + (peek(addr + 1) << 8);
+  uint8_t lo = peek(addr);
+  uint8_t hi = peek(addr + 1);
+  return lo + (hi << 8);
 }
 static uint16_t peek16al(uint16_t addr) {
   assert(!(addr & 1) && "peek16al() address must be word aligned");
-  return peek(addr) + (peek(addr + 1) << 8);
+  return peek16(addr);
 }
 
 static inline void push8(uint8_t v) {
