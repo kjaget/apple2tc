@@ -95,14 +95,20 @@ void Disas::loadROM(const uint8_t *data, size_t len) {
     return;
   if (len > 0x10000)
     throw std::range_error("ROM is too large");
-  uint16_t start = 0x10000 - len;
+  const uint16_t start = 0x10000 - len;
   addMemRange(MemRange(start, 0xFFFF, false));
   memcpy(memory_ + start, data, len);
+  fprintf(stderr, "Auto-loaded Apple II ROM\n");
 }
 
-static void loadDisk2ROM(uint8_t *memory) {
-  for (unsigned i = 0; i != 0x100; ++i)
-    memory[0xC600 + i] = a2_disk2_rom_peek(i);
+void Disas::loadDisk2ROM() {
+    const auto it = findMemRange(0xC600);
+    if (it == memRanges_.cend()) {
+      addMemRange(MemRange(0xC600, 0xC6FF, false));
+      for (unsigned i = 0; i != 0x100; ++i)
+        memory_[0xC600 + i] = a2_disk2_rom_peek(i);
+      fprintf(stderr, "Auto-loaded Disk II ROM\n");
+    }
 }
 
 void Disas::addMemRange(MemRange range) {
@@ -149,19 +155,13 @@ AsmBlock *Disas::addWork(uint16_t addr, AsmBlock **curBlock) {
   // Is this a ROM call, check if we need to install Apple II ROM
   if (addr > A2_IO_RANGE_END && (memRanges_.empty() || memRanges_.back().to < addr)) {
     loadROM(apple2plus_rom, apple2plus_rom_len);
-    fprintf(stderr, "Auto-loaded Apple II ROM\n");
   }
 
   // Disk II boot ROM sits in the $C600-$C6FF soft-switch window. The live
   // emulator resolves it via the IO layer, but the disassembler needs the bytes
   // present in its own `memory_` image before `--code-at` can validate the target.
   if (addr >= 0xC600 && addr <= 0xC6FF) {
-    auto it = findMemRange(0xC600);
-    if (it == memRanges_.end()) {
-      addMemRange(MemRange(0xC600, 0xC6FF, false));
-      loadDisk2ROM(memory_);
-      fprintf(stderr, "Auto-loaded Disk II ROM\n");
-    }
+    loadDisk2ROM();
   }
 
   // Iterate while the previous block overlaps addr.

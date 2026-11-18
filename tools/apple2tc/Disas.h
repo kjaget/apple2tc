@@ -387,6 +387,7 @@ public:
 
   void loadBinary(uint16_t addr, const uint8_t *data, size_t len);
   void loadROM(const uint8_t *data, size_t len);
+  void loadDisk2ROM(void);
 
   [[nodiscard]] std::optional<uint16_t> getStart() const {
     return start_;
