@@ -430,6 +430,9 @@ public:
   const std::set<uint16_t> &getInlineStr() const {
     return inlineStr_;
   }
+  size_t generationStateCount() const {
+    return runData_ ? runData_->generations.size() : 0;
+  }
 
   auto asmBlocks() const {
     return makeIteratorRange(asmBlocks_.cbegin(), asmBlocks_.cend());
@@ -462,6 +465,12 @@ public:
     auto it = runData_->firstInstructions->find(pc);
     return it != runData_->firstInstructions->end() && it->second.operandChanged;
   }
+  bool recordedOperandChanged(uint16_t pc) const {
+    if (!runData_ || !runData_->firstInstructions)
+      return false;
+    auto it = runData_->firstInstructions->find(pc);
+    return it != runData_->firstInstructions->end() && it->second.operandChanged;
+  }
 
   bool canDecodeCode(uint16_t addr) const {
     return !recordedOnly_[addr] || observedCode_.count(addr);
@@ -470,6 +479,7 @@ public:
   void run(bool noGenerations);
   void printAsmListing();
   void printSimpleC(FILE *f);
+  void printSimpleCGenerations(FILE *f, const std::vector<Disas *> &states);
   void printMemoryDeclarations(FILE *f);
   void printMemoryInitialization(FILE *f);
   void printMemoryDefinitions(FILE *f);
@@ -538,7 +548,7 @@ private:
   void printAsmCodeRange(const AsmBlock &block, std::optional<uint32_t> &lastAddr);
   void printAsmDataRange(Range r);
 
-  void printSimpleCPrologue(FILE *f);
+  void printSimpleCPrologue(FILE *f, bool generationAware = false);
   void printSimpleCEpilogue(FILE *f);
   void printSimpleCRange(FILE *f, const AsmBlock &block, const AsmBlock *nextBlock);
   /// \return true if the generated instruction "falls through" to whatever
@@ -555,6 +565,8 @@ private:
   /// Whether the current operand supports self modification.
   bool scSelfModOperand_ = false;
   bool scDynamicOperand_ = false;
+  bool simpleCGenerationAware_ = false;
+  std::set<uint16_t> simpleCDynamicOperands_{};
 
 private:
   /// Optional path to a JSON file with runtime data.

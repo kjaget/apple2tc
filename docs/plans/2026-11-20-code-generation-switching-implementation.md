@@ -1,8 +1,10 @@
 # Code-generation switching: first implementation plan
 
-Status: test-driven plan; Tasks 1 and 2 are implemented, later tasks remain
-proposed. This is a companion to the [living design](2026-11-17-code-generation-switching.md),
-primarily addressing Question 1, bullet 1. Work through the tasks in order;
+Status: Tasks 1-5 are implemented. Task 6 now has an initial, opt-in Simple C
+implementation for the directed low-memory fixtures; ambiguity, timing,
+debug/probe, and repeated-call validation remain open. This is a companion to
+the [living design](2026-11-17-code-generation-switching.md), primarily
+addressing Question 1, bullet 1. Work through the remaining tasks in order;
 each task should be independently reviewable and leave existing default
 behavior and the normal test suite working. Update both documents with
 findings, including findings from refining the tasks themselves.
@@ -298,43 +300,60 @@ state completeness remain for later tasks.
       already exists.
 
 **Evidence gate:** the fixtures establish a candidate contract and show why
-block-entry-only dispatch is too late. Task 6 must begin with the fail-closed
-matcher tests above; do not emit generation dispatch until they pass.
+block-entry-only dispatch is too late. The initial Task 6 implementation now
+has known/restored, delayed, same-block, and unknown-opcode replay checks.
+Runtime ambiguity and broader independent-region tests remain gates for
+expanding the supported subset.
 
 ### 6. Emit complete switches and safe dispatch
 
 **Files:** [`PrintSimpleC.cpp`](../../tools/apple2tc/PrintSimpleC.cpp),
 runtime helpers only if needed, generated-C tests.
 
-- [ ] Implement and test the runtime signature matcher before emission. Cover
-      known, unchanged, delayed, and restored states; partial/unknown bytes
-      must match zero candidates, and mixed independent regions or duplicate
-      signatures with different bodies must fail as ambiguous. Match the full
-      set of state-defining bytes with non-side-effecting reads. Invalidate
-      through the shared low-memory write path, including stack writes.
-- [ ] Add an opt-in generation-aware emission path. Emit one helper per
-      materialized state with its own complete static PC switch and explicit
-      unknown-PC error. Keep initialization and externally visible runtime
-      interface unchanged. Make persistence and ownership of active state,
-      PC, remaining cycles and `branchTarget` explicit across helper calls.
-- [ ] Integrate the validated selector and write tracking. Split blocks or
-      insert a safe targeted exit *before* an affected instruction as needed;
-      account for cycles already charged and preserve debug/probe event
-      semantics. Do not simply switch at the next original block entry or
-      add a blanket opcode fetch at every instruction.
-- [ ] Enable cases 1, 2 and the supported portions of 3-5 in the normal suite.
-      Compare interpreter and generated state, including return to an earlier
-      state. Test an unknown opcode and ambiguous/partial state by checking a
-      specific diagnostic and that the wrong instruction did not execute.
-      Check unchanged operands remain constants and genuinely changed ones
-      use the existing dynamic reads.
-- [ ] Verify ordinary no-option generation and legacy fixtures remain
-      unchanged; test repeated `run_emulated()` calls and yield boundaries.
-      Document the option, supported subset, recollection requirements and
-      explicit errors alongside commands to reproduce the tests.
+- [x] Implement an on-demand signature matcher using direct low-memory reads.
+      The directed, delayed, restored, and preloaded fixtures exercise complete
+      matches; the installer naturally exercises partial writes. Writes through
+      `ram_poke_impl`, including stack pushes, set a dirty flag. A partial
+      signature is not treated as a selectable state; when the current
+      instruction still matches the active state, checking remains pending
+      until later writes complete.
+- [x] Reject identical signatures that have different decoded instruction or
+      block layouts. Unknown current instructions fail before stale code runs.
+- [ ] Add explicit runtime tests where two different state signatures both
+      match because they constrain independent regions, and where a generated
+      state is ambiguous at the current PC. These remain unsupported/error
+      cases until tested.
+- [x] Add an opt-in `--generation-aware` path. It emits one helper with a
+      complete static PC switch per distinct materialized code state, persists
+      the active state and `branchTarget` across helper calls, and reports
+      unknown PCs. Existing initialization and the `run_emulated()` interface
+      remain in place.
+- [x] Detect writes before the next instruction, including inside the
+      existing basic block. The initial implementation uses per-instruction
+      dirty-flag guards but performs no opcode fetch unless memory has been
+      written. A safe resume case re-credits the new state's remaining
+      instruction cycles without repeating the original block-entry probe or
+      debug event.
+- [ ] Compare cycles and debug/probe events at transition boundaries, and
+      test repeated `run_emulated()` calls/yields. The current generated-C
+      driver checks result RAM, not all architectural state or event timing;
+      cycle/event equivalence is not yet claimed.
+- [x] Generated-C replay tests cover the installed/replaced/restored fixture,
+      the preloaded length-changing fixture, delayed replacement, and an
+      intra-block opcode replacement. An injected unknown opcode produces an
+      explicit runtime diagnostic. The legacy Simple C path still generates
+      successfully and retains its known first-version mismatch.
+- [x] Direct output checks verify an unchanged immediate remains a literal and
+      a recorded modified immediate uses a runtime read. A driver changes that
+      operand after initialization and confirms the generated instruction
+      observes it.
+- [ ] Broaden ordinary no-option regression coverage beyond the current build
+      and generation-switch tests.
 
-**Done:** the first generation-aware product runs the directed supported
-fixtures correctly and fails closed outside its documented subset.
+**Initial result:** the opt-in path correctly replays the directed low-memory
+fixtures and rejects an injected unknown opcode. It is not yet a general
+generation-aware runtime: the remaining gates above must pass before widening
+the documented support claim.
 
 ## Iteration after the first working product
 

@@ -3,6 +3,9 @@
 
 int main(void) {
   a2host_init_emulation();
+#ifdef APPLE2TC_GENERATION_AWARE
+  init_emulated();
+#endif
   s_pc = 0x0300;
   run_emulated(1000);
   printf("$0200=%02x $0201=%02x $0202=%02x\n",

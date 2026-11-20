@@ -587,11 +587,13 @@ also a learning, even before code is written.
   `$0302 STA $0305` changes the next instruction from `LDA #$11` to
   `LDX #$11`; both instructions remain in the `$0300-$030C` basic block.
   Therefore a check only at the next block entry would execute the wrong
-  instruction. A correct boundary must be before `$0305`, splitting the
-  generated block there. The collector's effective-address helper resolves
-  direct, indexed, and indirect writes using runtime registers/pointers, so a
-  static guess about the stored value is unnecessary for these observations.
-  It does not record every write event.
+  instruction. The initial emitter keeps the original block's cycle/probe
+  boundary and adds a resume case before `$0305`; if a transition is detected,
+  it re-credits the unexecuted suffix and resumes in the selected switch. The
+  collector's effective-address helper resolves direct, indexed, and indirect
+  writes using runtime registers/pointers, so a static guess about the stored
+  value is unnecessary for these observations. It does not record every write
+  event.
 - **2026-11-20, Task 5 stack-write gap:** The stack fixture uses `PHA` to write
   `$A9 $11 $4C $80 $03` at `$013C`, then executes that routine. The bytes appear
   in `FirstInstructions` but not in `generations[].code`: the collector handles
@@ -615,15 +617,48 @@ also a learning, even before code is written.
   side-effecting `peek()`. A store's value and timing are not transition
   evidence. Zero matches, including partial/unknown code, must error; multiple
   matches with different bodies must error; equivalent candidates can be
-  coalesced. The current fixtures establish the evidence and boundary but do
-  not implement or test a runtime selector. That fail-closed matcher and its
-  known/unchanged/restored/partial/unknown/ambiguous tests are a gate at the
-  start of implementation Task 6.
+  coalesced. Task 6 now implements an on-demand low-memory selector and
+  unknown-instruction failure. During a partial write, if the current
+  instruction still matches the active state, the dirty flag remains set and
+  selection is retried before later instructions. Runtime ambiguity and
+  independent-region tests remain open.
 - **2026-11-20:** `CYCLES` currently charges a whole block and dispatches
   debug/probe events at its entry. Splitting blocks or exiting mid-block for
   a transition needs explicit cycle and event tests, not just equivalent final
   RAM. Moving dispatch into helper functions also needs to preserve
   `branchTarget` and remaining-cycle state across calls.
+- **2026-11-20, Task 6 initial implementation:** `apple2tc --generation-aware
+  --run-data=recording.json input.b33` emits one static PC switch per distinct
+  materialized low-memory code state. It requires `FirstInstructions` and at
+  least one `generations[]` entry; the recording's partial segments are
+  materialized cumulatively as in `--generation-state=N`. This is an opt-in
+  Simple C mode, not a change to ordinary `--simple-c`. It rejects ROM,
+  language-card, `--code-at`, `--inline-str`, and `--no-gen` combinations.
+  A shared low-memory write helper sets a dirty flag. Generated checks compare
+  candidate instruction bytes through direct `s_ram` reads, excluding operands
+  known to be dynamic. The dirty fast path checks before each instruction but
+  fetches no opcode when memory is clean. Unmatched whole-state signatures are
+  tolerated only while the current instruction still matches the active
+  static code; otherwise a unique candidate at that PC is required, and
+  unknown/ambiguous code fails before execution.
+- **2026-11-20, Task 6 block/cycle handling:** To support a change within an
+  original basic block without repeating its `CYCLES` debug/probe dispatch,
+  otherwise non-entry instructions can be emitted as resume switch cases. The
+  original block's cycles are charged once; a transition returns after
+  restoring the not-yet-executed cycle suffix, and the selected state's resume
+  case charges its own suffix without a second block-entry event. The directed
+  same-block fixture passes, but cycle totals and exact debug/probe event
+  equivalence still need dedicated assertions.
+- **2026-11-20, Task 6 replay validation:** `bash
+  tests/generation-switch-test.sh build` compiles and runs generation-aware
+  Simple C for installed/replaced/restored, delayed, preloaded
+  length-changing, and same-block fixtures. Their result RAM matches `a2run`;
+  the generated path also dynamically reads a modified immediate operand and
+  rejects an injected unknown opcode at `$0900`. The default Simple C
+  reproduction still yields `$0201=$00` instead of `$22`, confirming the
+  original mismatch remains isolated to the opt-in implementation. These tests
+  do not yet compare all registers, cycles, probes, repeated calls, or
+  ambiguous independent code regions.
 
 [blog-dynamic]: https://tmikov.blogspot.com/2021/12/apple2tc-apple-ii-binary-to-c_24.html
 [blog-ir]: https://tmikov.blogspot.com/2022/01/apple2tc-apple-ii-binary-to-c_23.html

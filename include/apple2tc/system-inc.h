@@ -24,6 +24,11 @@ static int s_remaining_cycles = 0;
 
 static uint8_t s_ram[0x10000];
 
+#ifdef APPLE2TC_GENERATION_AWARE
+static bool s_generation_dirty = false;
+static unsigned s_active_generation = 0;
+#endif
+
 uint8_t g_debug = 0;
 
 #define CYCLES(pc, cycles)                                                 \
@@ -66,6 +71,10 @@ void reset_regs(void) {
   s_y = 0;
   s_status = STATUS_IGNORED;
   s_sp = 0xFF;
+#ifdef APPLE2TC_GENERATION_AWARE
+  s_active_generation = 0;
+  s_generation_dirty = true;
+#endif
 }
 
 void set_regs(regs_t r) {
@@ -75,6 +84,9 @@ void set_regs(regs_t r) {
   s_y = r.y;
   s_status = r.status;
   s_sp = r.sp;
+#ifdef APPLE2TC_GENERATION_AWARE
+  s_generation_dirty = true;
+#endif
 }
 
 regs_t get_regs(void) {
@@ -106,6 +118,10 @@ static inline void ram_poke_impl(uint16_t addr, uint8_t value) {
     return;
   }
   s_ram[addr] = value;
+#ifdef APPLE2TC_GENERATION_AWARE
+  if (addr < 0xC000)
+    s_generation_dirty = true;
+#endif
 }
 void ram_poke(uint16_t addr, uint8_t value) {
   ram_poke_impl(addr, value);

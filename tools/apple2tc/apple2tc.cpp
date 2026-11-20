@@ -60,6 +60,7 @@ static void printHelp() {
   fprintf(stderr, "  --rom               Input file is a ROM\n");
   fprintf(stderr, "  --asm               Generate asm listing (default)\n");
   fprintf(stderr, "  --simple-c          Generate simple C code\n");
+  fprintf(stderr, "  --generation-aware  Generate Simple C with runtime code-state dispatch\n");
   fprintf(stderr, "  --language-card     Enable language-card mapping (requires a new recording)\n");
   fprintf(stderr, "  --ir                Generate IR\n");
   fprintf(stderr, "  --irc1              Generate C1 representation of the IR\n");
@@ -90,6 +91,7 @@ int main(int argc, char **argv) {
     DumpRegLiveness,
   };
   bool noGenerations = false;
+  bool generationAware = false;
   bool languageCard = false;
   bool preserveRetAddr = false;
   bool altExits = false;
@@ -125,6 +127,11 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[i], "--simple-c") == 0) {
       action = Action::GenSimpleC;
+      continue;
+    }
+    if (strcmp(argv[i], "--generation-aware") == 0) {
+      action = Action::GenSimpleC;
+      generationAware = true;
       continue;
     }
     if (strcmp(argv[i], "--language-card") == 0) {
@@ -247,6 +254,22 @@ int main(int argc, char **argv) {
             "--code-at, or --inline-str\n");
     return 2;
   }
+  if (generationAware && action != Action::GenSimpleC) {
+    fprintf(stderr, "--generation-aware requires --simple-c output\n");
+    return 2;
+  }
+  if (generationAware &&
+      (noGenerations || languageCard || rom || !codeAtPath.empty() || !inlineStrPath.empty() ||
+       generationState.has_value())) {
+    fprintf(stderr,
+            "--generation-aware cannot be combined with --no-gen, --generation-state, "
+            "--language-card, --rom, --code-at, or --inline-str\n");
+    return 2;
+  }
+  if (generationAware && runDataPath.empty()) {
+    fprintf(stderr, "--generation-aware requires --run-data\n");
+    return 2;
+  }
 
   // Load the input binary.
   auto [binary, start] = loadInputBinary(inputPath.c_str(), rom);
@@ -281,7 +304,29 @@ int main(int argc, char **argv) {
       dis->loadBinary(start, binary.data(), binary.size());
       dis->setStart(start);
     }
-    dis->run(noGenerations);
+    std::vector<std::shared_ptr<Disas>> generationStates;
+    if (generationAware) {
+      dis->setGenerationState(0);
+      dis->run(false);
+      size_t stateCount = dis->generationStateCount();
+      generationStates.push_back(dis);
+      for (size_t i = 0; i < stateCount; ++i) {
+        std::shared_ptr<Disas> state;
+        if (i == 0) {
+          continue;
+        } else {
+          state = std::make_shared<Disas>(runDataPath);
+          state->setUseFirstObserved(true);
+          state->loadBinary(start, binary.data(), binary.size());
+          state->setStart(start);
+        }
+        state->setGenerationState((unsigned)i);
+        state->run(false);
+        generationStates.push_back(std::move(state));
+      }
+    } else {
+      dis->run(noGenerations);
+    }
     if (!coveragePath.empty()) {
       FILE *cf = fopen(coveragePath.c_str(), "wt");
       if (!cf) {
@@ -297,7 +342,15 @@ int main(int argc, char **argv) {
       dis->printAsmListing();
       break;
     case Action::GenSimpleC:
-      dis->printSimpleC(stdout);
+      if (generationAware) {
+        std::vector<Disas *> states;
+        states.reserve(generationStates.size());
+        for (const auto &state : generationStates)
+          states.push_back(state.get());
+        generationStates.front()->printSimpleCGenerations(stdout, states);
+      } else {
+        dis->printSimpleC(stdout);
+      }
       break;
     case Action::GenIR:
     case Action::GenIRC1:

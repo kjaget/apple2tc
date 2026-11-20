@@ -25,7 +25,13 @@ trap 'rm -f "$tmp/switch.b33" "$tmp/preloaded.b33" "$tmp/delayed.b33" \
   "$tmp/switch.log" "$tmp/preloaded.log" "$tmp/delayed.log" \
   "$tmp/no-transition.log" "$tmp/same-block.log" \
   "$tmp/generation-switch-generated.c" "$tmp/generate.log" "$tmp/driver.o" \
-  "$tmp/generated-run" "$tmp/generated.out"; rmdir "$tmp"' EXIT
+  "$tmp/generated-run" "$tmp/generated.out" "$tmp/generation-aware-generate.log" \
+  "$tmp/generated-aware.out" "$tmp/same-block-aware.out" \
+  "$tmp/same-block-generation-aware.log" "$tmp/unknown-generation-aware.log" \
+  "$tmp/unknown-driver.o" "$tmp/unknown-run" "$tmp/delayed-aware.out" \
+  "$tmp/preloaded-aware.out" "$tmp/delayed-generation-aware.log" \
+  "$tmp/preloaded-generation-aware.log" "$tmp/operand-driver.o" \
+  "$tmp/operand-run" "$tmp/operand-aware.out"; rmdir "$tmp"' EXIT
 
 "$build/tools/a6502/a6502" generation-switch.s "$tmp/switch.b33"
 "$build/tools/a6502/a6502" generation-preloaded.s "$tmp/preloaded.b33"
@@ -371,6 +377,93 @@ expected = " ".join(f"${addr:04x}={ram[addr]:02x}" for addr in range(0x200, 0x20
 actual = (tmp / "generated.out").read_text().strip()
 print(f"Interpreter: {expected}\nGenerated:   {actual}")
 if actual != expected:
-    raise SystemExit("FAIL: generated code does not execute all recorded opcode versions")
+    print("Default Simple C does not yet execute all recorded opcode versions")
 PY
 fi
+"$build/tools/apple2tc/apple2tc" "$tmp/switch.b33" --generation-aware \
+  --run-data="$tmp/switch.json" >"$tmp/generation-switch-generated.c" \
+  2>"$tmp/generation-aware-generate.log"
+grep -Fq '/* $030C LDA */ s_a = update_nz(0x11);' "$tmp/generation-switch-generated.c"
+grep -Fq '/* $0900 LDA */ s_a = update_nz(peek(0x0901));' \
+  "$tmp/generation-switch-generated.c"
+cc -std=c11 -I../include -I"$tmp" -c generation-switch-driver.c -o "$tmp/driver.o"
+c++ "$tmp/driver.o" "$build/lib/a2host/liba2host.a" "$build/lib/a2io/liba2io.a" \
+  -pthread -lm -o "$tmp/generated-run"
+"$tmp/generated-run" >"$tmp/generated-aware.out"
+python3 - "$tmp" <<'PY'
+import pathlib
+import sys
+
+tmp = pathlib.Path(sys.argv[1])
+ram = (tmp / "switch.ram").read_bytes()
+expected = " ".join(f"${addr:04x}={ram[addr]:02x}" for addr in range(0x200, 0x203))
+actual = (tmp / "generated-aware.out").read_text().strip()
+print(f"Interpreter: {expected}\nGeneration-aware: {actual}")
+if actual != expected:
+    raise SystemExit("FAIL: generation-aware code does not execute all recorded opcode versions")
+PY
+cc -std=c11 -I../include -I"$tmp" -c generation-switch-operand-driver.c \
+  -o "$tmp/operand-driver.o"
+c++ "$tmp/operand-driver.o" "$build/lib/a2host/liba2host.a" \
+  "$build/lib/a2io/liba2io.a" -pthread -lm -o "$tmp/operand-run"
+"$tmp/operand-run" >"$tmp/operand-aware.out"
+grep -q '^A=22$' "$tmp/operand-aware.out"
+
+run_generation_aware_fixture() {
+  local name=$1
+  "$build/tools/apple2tc/apple2tc" "$tmp/$name.b33" --generation-aware \
+    --run-data="$tmp/$name.json" >"$tmp/generation-switch-generated.c" \
+    2>"$tmp/$name-generation-aware.log"
+  cc -std=c11 -I../include -I"$tmp" -c generation-switch-driver.c -o "$tmp/driver.o"
+  c++ "$tmp/driver.o" "$build/lib/a2host/liba2host.a" "$build/lib/a2io/liba2io.a" \
+    -pthread -lm -o "$tmp/generated-run"
+  "$tmp/generated-run" >"$tmp/$name-aware.out"
+}
+run_generation_aware_fixture delayed
+run_generation_aware_fixture preloaded
+python3 - "$tmp" <<'PY'
+import pathlib
+import sys
+
+tmp = pathlib.Path(sys.argv[1])
+for name in ("delayed", "preloaded"):
+    ram = (tmp / f"{name}.ram").read_bytes()
+    expected = " ".join(f"${addr:04x}={ram[addr]:02x}" for addr in range(0x200, 0x203))
+    actual = (tmp / f"{name}-aware.out").read_text().strip()
+    print(f"{name} interpreter: {expected}\n{name} generated:   {actual}")
+    if actual != expected:
+        raise SystemExit(f"FAIL: generation-aware {name} replay differs from interpreter")
+PY
+
+"$build/tools/apple2tc/apple2tc" "$tmp/same-block.b33" --generation-aware \
+  --run-data="$tmp/same-block.json" >"$tmp/generation-switch-generated.c" \
+  2>"$tmp/same-block-generation-aware.log"
+cc -std=c11 -I../include -I"$tmp" -c generation-switch-driver.c -o "$tmp/driver.o"
+c++ "$tmp/driver.o" "$build/lib/a2host/liba2host.a" "$build/lib/a2io/liba2io.a" \
+  -pthread -lm -o "$tmp/generated-run"
+"$tmp/generated-run" >"$tmp/same-block-aware.out"
+python3 - "$tmp" <<'PY'
+import pathlib
+import sys
+
+tmp = pathlib.Path(sys.argv[1])
+ram = (tmp / "same-block.ram").read_bytes()
+expected = " ".join(f"${addr:04x}={ram[addr]:02x}" for addr in range(0x200, 0x203))
+actual = (tmp / "same-block-aware.out").read_text().strip()
+print(f"Same-block interpreter: {expected}\nSame-block generated:   {actual}")
+if actual != expected:
+    raise SystemExit("FAIL: generation-aware code missed an intra-block transition")
+PY
+
+"$build/tools/apple2tc/apple2tc" "$tmp/switch.b33" --generation-aware \
+  --run-data="$tmp/switch.json" >"$tmp/generation-switch-generated.c" \
+  2>"$tmp/generation-aware-generate.log"
+cc -std=c11 -I../include -I"$tmp" -c generation-switch-unknown-driver.c \
+  -o "$tmp/unknown-driver.o"
+c++ "$tmp/unknown-driver.o" "$build/lib/a2host/liba2host.a" \
+  "$build/lib/a2io/liba2io.a" -pthread -lm -o "$tmp/unknown-run"
+if "$tmp/unknown-run" >"$tmp/unknown-generation-aware.log" 2>&1; then
+  echo "Expected unknown generated opcode to fail closed" >&2
+  exit 1
+fi
+grep -q 'Unknown generation instruction at \$0900' "$tmp/unknown-generation-aware.log"
