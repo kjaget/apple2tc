@@ -1,0 +1,353 @@
+# Code-generation switching: first implementation plan
+
+Status: test-driven plan; Task 1 fixtures are implemented, later tasks remain
+proposed. This is a companion to the [living design](2026-11-17-code-generation-switching.md),
+primarily addressing Question 1, bullet 1. Work through the tasks in order;
+each task should be independently reviewable and leave existing default
+behavior and the normal test suite working. Update both documents with
+findings, including findings from refining the tasks themselves.
+
+## First product and boundaries
+
+Produce a working **opt-in** Simple C path for directed, low-memory programs
+whose code is installed, executed, overwritten and executed again. Emit one
+static-opcode function containing a complete PC switch for each materialized
+code state. `run_emulated()` dispatches the selected function. Copying common
+cases between functions is intentional for this iteration. Unmodified
+operands remain constants; operands detected as modified use the existing
+dynamic-read rules. No per-instruction opcode interpreter is introduced.
+
+The first product is not a promise that an arbitrary recording is supported.
+Its supported transition patterns and recording requirements must be explicit.
+Where correctness cannot be established, the opt-in path must reject at
+generation time or report an explicit runtime error before executing stale
+code. The legacy path, existing recordings and generated output must not
+silently acquire different semantics. Do not equate an array index or recorded
+transition order with a runtime clock.
+
+Only low-memory code replacement is in scope for the first working replay.
+Language-card changes, independently changing regions, code sharing, IR/IRC1,
+and large EOS overlays are later iterations, not reasons to postpone the
+directed milestone. Unknown behavior in those categories is not accepted
+silently by the new path. This plan does not address the separate EOS `-O2`
+issue.
+
+## Invariants and terminology
+
+- **Observed generation** is a collection-time grouping; **materialized code
+  state** is a complete code view usable to disassemble one generated switch.
+  Their indices need not match until the collector proves the correspondence.
+  Existing `generations` JSON already stores useful byte contents as `code`
+  segments with addresses, plus registers at save time. It is a sequence of
+  partial segment sets, not complete state snapshots or runtime transition
+  records. Reuse those bytes when supported by the evidence.
+- Index 0 of the new representation is the initial state. It uses the binary,
+  initial memory and first-generation observations according to the same rules
+  as the current path. A recorded later `FirstInstructions` value must not
+  silently replace an earlier executable version. Record the precise
+  initialization and compatibility rules in the implementation.
+- A bitfield records membership, not instruction bytes, execution order,
+  operand history, or a clear/override operation. A missing sparse entry means
+  inherit only when that is explicitly represented; it is not the same as a
+  known-zero bit or an invalidated instruction. Keep written, start and full
+  byte sets distinct.
+- To claim an instruction version was executed, its bytes must be supported
+  by evidence of what was visible **when the instruction executed**.
+  Existing segment bytes can be useful candidates, but snapshot memory at a
+  later write can already have changed operands. An instruction's size and
+  operand-change information must be interpreted for its opcode version.
+  Preserve existing static self-modification analysis.
+- A transition is decided from the actual current program state, not cycles,
+  frame count, input timestamps, or an unconditional `generation++`. A
+  recorded transition PC is a candidate, not an unconditional switch.
+- Changed code must be selected before its first affected instruction,
+  including inside a previously formed basic block. Unknown or ambiguous
+  matches are errors. No detection check may accidentally access I/O.
+- Preserve registers, flags, stack, memory, PC, cycles, branch penalties,
+  debug/probe events and yield behavior. In particular, a block's `CYCLES`
+  currently charges the block and dispatches a probe at entry: cutting it
+  short after that charge is not automatically correct.
+
+## Fixtures and test strategy
+
+Use small assembly programs under `tests/`, with focused shell checks in
+`tests/run-tests.sh` or a focused helper invoked by it. Assemble using
+`a6502`; collect using `a2run --collect`; run the interpreter and compiled
+Simple C under equivalent initial state. The existing
+[`language-card-driver.c`](../../tests/language-card-driver.c) and
+[`run-tests.sh`](../../tests/run-tests.sh) demonstrate generated-C drivers
+and host linking. Where an end-to-end fixture needs booting or a snapshot,
+the existing `--preload`, `--from-rom`, `--snapshot-at` and `--snapshot-out`
+options are starting points; confirm exact current invocation and start state
+before encoding it in the test. Do not depend on session-only files.
+
+For each behavioral case, assert hand-calculated interpreter results first,
+then compare generated code with the interpreter at a defined stop PC. Check
+PC, A/X/Y, status and SP, selected RAM and cycle count when both paths expose
+comparable boundaries. Verify probe/debug behavior separately where appropriate.
+Compare semantic JSON fields rather than incidental formatting or log text.
+Use temporary test outputs with cleanup following repository practice.
+
+1. **Installed, replaced, restored:** adapt the directed example in the
+   [design](2026-11-17-code-generation-switching.md#directed-low-memory-experiment).
+   Install `LDA #$11; RTS` at `$0900`, call it and store A at `$0200`.
+   Replace the opcode and immediate with `LDX #$22; RTS`, clear X, call and
+   store X at `$0201`. Restore `LDA #$11; RTS`, clear A, call and store A at
+   `$0202`. Expect `$11,$22,$11`; assert both actual opcodes and the unchanged
+   RTS are represented. This covers multiple observed states and reversion.
+2. **Preloaded and lengths:** start with executable code in the input binary,
+   execute it before any write, then replace it with an instruction of a
+   different length and execute again. Use distinct result bytes and a return
+   target that makes an incorrect length visible. Verify both old and new
+   instruction bytes and starts; this catches reliance on `memWritten_` for
+   the initial version.
+3. **Operands and overlapping streams:** one unchanged opcode has a modified
+   operand, and a byte is also an opcode when entered from an overlapping
+   start. Assert operand-only change uses a dynamic read without forcing a new
+   opcode version; when the overlapping opcode changes, it must be recognized
+   separately. Include an unchanged operand that remains a literal in output.
+4. **Unsafe boundary and unknown code:** a store modifies an opcode later in
+   the same initially straight-line block; the next execution must use the new
+   instruction, with correct cycles and probe events. Separately install an
+   unrecorded opcode and assert a specific explicit failure before executing
+   it. These are acceptance tests for the functional path, not assumptions
+   about how early collector tasks already behave.
+5. **Timing and order:** run the same supported transition with input-controlled
+   delays and with a path that does not take the transition; verify correct
+   results without a clock-based switch. Add alternate order and independent
+   regions as an investigation case: support them only when proven, otherwise
+   assert an explicit diagnostic rather than an incorrect whole-state match.
+
+Introduce fixture infrastructure and collector assertions before enabling
+generated-code acceptance tests in the normal suite. During development, run
+the currently failing end-to-end assertion explicitly; do not commit a
+permanently failing default suite or an expected failure that can mask a
+regression. Add each acceptance assertion to the suite when its implementation
+is ready.
+
+## Detailed tasks
+
+### 1. Establish the baseline and reproducible first fixture
+
+**Files:** new focused `tests/` assembly and driver/helper; `tests/run-tests.sh`.
+
+- [x] Implement case 1 with a bounded interpreter run and deterministic stop;
+      assert the three result bytes and relevant state. Capture fresh run-data.
+- [x] Inspect each existing `generations` segment and `FirstInstructions`
+      entry for `$0900` and `$0902`. Document the actual snapshot boundaries,
+      bytes and omissions, including whether the final save adds an empty or
+      partial record. Do not assume one snapshot per installed version.
+- [x] Confirm that the original two-version example's existing JSON contains
+      `$A9 $11 $60` and `$A2 $22` at `$0900`; compare the recorded segments
+      to the known execution. Also inspect Robotron's `$4C6E` segments as a
+      real existing-recording example. Identify which facts can be reused
+      without changing collection or the JSON schema.
+- [x] Generate and run current Simple C as an explicit development
+      reproduction; report the discrepancy, but keep the normal test suite
+      green. Record the command and observed result in the living design.
+- [x] Add case 2's interpreter and collection checks, explicitly showing
+      whether preloaded, never-written code appears in the existing tracking.
+
+**Done:** fixtures reproduce the interpreter's expected results and show what
+the current recording can and cannot distinguish, without changing output.
+The [fixture findings and commands](2026-11-17-code-generation-switching.md#current-branch-directed-fixtures)
+include both snapshot sequences and the current Simple C mismatch.
+
+### 2. Add an indexed tracking container without changing collection semantics
+
+**Files:** [`DebugState6502.h`](../../include/apple2tc/DebugState6502.h),
+[`DebugState6502.cpp`](../../lib/cpuemu/DebugState6502.cpp), focused tests.
+
+- [ ] Write a focused test for index 0, append and independent updates: setting
+      a written/start/full bit in one entry must not mutate another; a newly
+      appended entry must have the explicitly chosen inherited state.
+- [ ] Introduce the smallest representation that groups the three existing
+      bitsets by index, choosing collector or decompiler ownership based on
+      Task 1's findings. Begin with full copies if practical; `3 * 65536` bits
+      is approximately 24 KiB per entry before container overhead. Treat this
+      as a measurement baseline, not a requirement to keep every transient
+      collector set indefinitely.
+- [ ] If the collector is changed, route its existing operations through entry
+      0 first; retain current save/reset behavior and existing JSON. Otherwise
+      keep its behavior intact while testing the new decompiler-side container.
+      Do not label old partial snapshots as complete code states. Verify reset
+      and repeated collection do not leak data between runs.
+- [ ] Exercise the append/copy operation in a focused test, but do not switch
+      the production collector to new semantics until Task 3 defines what its
+      entries mean.
+
+**Done:** current tests and serialized legacy behavior are unchanged;
+generation-indexed storage is tested independently. Measure memory and
+construction/lookup time with a realistic recording before choosing a sparse
+alternative. If measurements favor sparse overrides, test explicit clears,
+inheritance and bounded lookup before replacing copies.
+
+### 3. Reuse recorded bytes and fill demonstrated gaps
+
+**Files:** collector and serializer; focused collection tests; living design.
+
+- [ ] Write tests that consume the existing segment bytes for the directed
+      fixture and Robotron's `$4C6E` versions. Combine them with binary and
+      first-instruction data where applicable. Check which versions, sizes and
+      operand changes can actually be established; assert a changed operand
+      alone is not treated as a new opcode version.
+- [ ] Add cases for preloaded code, a changed operand before a later snapshot,
+      restoration and partial overwrites. Identify the precise information
+      missing from the existing fields; do not infer executed bytes solely from
+      `saveGeneration()`'s later `getMainRAM()` snapshot.
+- [ ] If the tests demonstrate a gap that cannot be closed from existing data,
+      capture only the missing facts at execution or another justified point.
+      Preserve the legacy `FirstInstructions` and `generations` fields; avoid
+      adding a duplicate full instruction history without a demonstrated need.
+- [ ] Use fixture traces to define and test when to append a tracking entry:
+      explicitly state what is inherited, overridden, and considered observed.
+      Distinguish a chronological observation from a complete, selectable
+      state. Include reset, no writes, restoration and a partially overwritten
+      instruction. If the current trigger cannot determine a state boundary,
+      preserve the raw observations and record the ambiguity instead of
+      manufacturing one.
+- [ ] Validate segment ranges and any added schema for malformed, missing,
+      duplicate and out-of-range data. Version or explicitly mark new fields
+      if required. Legacy loading stays unchanged. Generation-aware mode should
+      accept existing recordings when evidence suffices; otherwise explain
+      the specific missing evidence and whether recollection is needed, rather
+      than guessing missing instruction history.
+
+**Done:** tests show what existing recordings can support, supplemented only
+where necessary, with round-trip and invalid-input tests for changed formats.
+Legacy generation is unchanged. Document what the evidence does *not* prove
+about transitions.
+
+### 4. Materialize and disassemble independent code states
+
+**Files:** [`RuntimeData.cpp`](../../tools/apple2tc/RuntimeData.cpp),
+[`Disas.h`](../../tools/apple2tc/Disas.h),
+[`Disas.cpp`](../../tools/apple2tc/Disas.cpp), focused tests.
+
+- [ ] Write a test that loads a small, unambiguous multi-state recording and
+      checks instruction starts, bytes, decoded sizes and CFG successors for
+      each state. Check that unchanged code remains present and a changed
+      length does not inherit stale starts or edges.
+- [ ] Add a per-state code view for the opt-in path, initially materializing
+      copies of the previous view plus existing segment bytes as explicit
+      overrides when the evidence permits it. Keep executable observations
+      distinct from data bytes and state provenance; a copied bit cannot
+      manufacture an observed opcode. Rebuild or correctly invalidate
+      affected CFGs and overlapping entries.
+- [ ] Ensure state 0 follows the existing no-generation decode behavior where
+      applicable, and leave the existing single-state path and old recordings
+      alone. Reject ambiguous/incomplete evidence in the new path with the
+      offending state and PC in the diagnostic.
+- [ ] Test explicit clearing/invalidation, inherited code, preloaded code,
+      different instruction sizes and an overlapping entry. Record peak memory,
+      generation time and duplicated block count for later comparison.
+
+**Done:** tests can inspect distinct correct static CFGs at the same PC; no
+runtime dispatch or changed default output is needed yet.
+
+### 5. Find and validate transition evidence
+
+**Files:** focused fixtures, collector/loader if needed, living design.
+
+- [ ] For case 1, list the actual stores, affected opcode addresses, and
+      subsequent execution entries; repeat with a delay and a no-transition
+      path. Investigate whether static analysis can identify the small
+      transition sequence, including indexed/indirect writes, without assuming
+      the store always writes the recorded value.
+- [ ] Define a testable selection contract for the supported subset: candidate
+      boundary, code bytes or other state needed to distinguish versions,
+      invalidation on relevant writes, and what happens for zero or multiple
+      matches. A single PC or last-recorded index is not sufficient evidence.
+      Checks must use non-side-effecting memory access and must not match only
+      one byte when that would permit an unsafe mixed state.
+- [ ] Check all ways the supported generated program can write code, including
+      helper, stack and external/host paths where applicable. Either route
+      them through tracking or explicitly reject/exclude them with a test.
+      If static analysis cannot supply enough evidence, add the smallest
+      collection-time transition observations to run-data and validate them;
+      collection evidence still does not replace runtime state checks.
+- [ ] Write tests for known selection, unchanged execution, restoration,
+      partial/unknown writes and an ambiguous candidate. Add a same-block
+      test showing that a boundary after the affected instruction is too late.
+      Record the chosen subset and any unresolved detection costs in the design.
+
+**Done:** the proposed selector is justified by tests and fails closed on
+unsupported or ambiguous states. If no safe boundary can be proven, stop and
+revise the plan before emitting working dispatch.
+
+### 6. Emit complete switches and safe dispatch
+
+**Files:** [`PrintSimpleC.cpp`](../../tools/apple2tc/PrintSimpleC.cpp),
+runtime helpers only if needed, generated-C tests.
+
+- [ ] Add an opt-in generation-aware emission path. Emit one helper per
+      materialized state with its own complete static PC switch and explicit
+      unknown-PC error. Keep initialization and externally visible runtime
+      interface unchanged. Make persistence and ownership of active state,
+      PC, remaining cycles and `branchTarget` explicit across helper calls.
+- [ ] Integrate the validated selector and write tracking. Split blocks or
+      insert a safe targeted exit *before* an affected instruction as needed;
+      account for cycles already charged and preserve debug/probe event
+      semantics. Do not simply switch at the next original block entry or
+      add a blanket opcode fetch at every instruction.
+- [ ] Enable cases 1, 2 and the supported portions of 3-5 in the normal suite.
+      Compare interpreter and generated state, including return to an earlier
+      state. Test an unknown opcode and ambiguous/partial state by checking a
+      specific diagnostic and that the wrong instruction did not execute.
+      Check unchanged operands remain constants and genuinely changed ones
+      use the existing dynamic reads.
+- [ ] Verify ordinary no-option generation and legacy fixtures remain
+      unchanged; test repeated `run_emulated()` calls and yield boundaries.
+      Document the option, supported subset, recollection requirements and
+      explicit errors alongside commands to reproduce the tests.
+
+**Done:** the first generation-aware product runs the directed supported
+fixtures correctly and fails closed outside its documented subset.
+
+## Iteration after the first working product
+
+1. Run the [investigation and validation](2026-11-17-code-generation-switching.md#investigation-and-validation)
+   cases; record results and update both plans before choosing optimizations.
+   Include Robotron/Bolo evidence and a representative EOS recording when the
+   required coverage is available; distinguish observed replay from general
+   correctness.
+2. Measure duplicated switches and generated binary size, generation-time
+   CPU/peak memory, selector checks and generated runtime overhead. Compare
+   full-copy tracking with a sparse/delta prototype on the same fixtures and
+   a realistic recording; verify equal semantics, including explicit clears.
+3. Extend supported transition patterns and independent-region combinations
+   using tests first. Revisit whether a global generation is an adequate
+   identity; do not imply unobserved combinations are already supported.
+4. Explore shared unchanged blocks/functions to reduce duplication and make a
+   hand-improved replacement reusable. Preserve dispatch, PC, cycles and
+   optimizer boundaries; measure rather than assume the benefit.
+5. Add language-card physical backing and visibility tests from the design,
+   including writes while ROM is visible and mapping-only switches. Then
+   bring version-aware CFG identity to IR/IRC1 with focused optimizer tests.
+   Neither is accomplished merely by adding more bitfields.
+
+## Planning findings and open gates
+
+- **2026-11-20:** The current collector marks an instruction only when its
+  opcode address was previously written, and snapshots later memory on
+  `saveGeneration()`. Thus a list of existing bitsets is useful groundwork,
+  but cannot alone preserve preloaded instructions or the bytes executed.
+- **2026-11-20:** Existing run-data already includes generation-specific byte
+  segments. Robotron records `$60` and `$A5 $CA` at `$4C6E` in generations
+  1 and 2; the directed example also records both `$0900` versions. Reuse and
+  validate these bytes first, adding collection data only for demonstrated
+  gaps. A saved segment is not a complete execution history.
+- **2026-11-20:** `FirstInstructions` is global per PC and stores a single
+  opcode and operand-change flag. Per-version observations must not overwrite
+  it or turn its legacy consumers into accidental generation-aware consumers.
+- **2026-11-20:** Whole-switch duplication is an initial implementation
+  choice, not a complete answer to Question 2. A global state may not represent
+  separately modified regions or every partial-write combination.
+- **Open:** What evidence suffices to decide that an overlay is ready without
+  checking every opcode or switching on each store? Which write sources can
+  bypass generated helpers? How are ambiguous matches and unobserved paths
+  detected before execution? Resolve in Task 5 and document the resulting
+  limitations.
+- **Open:** How do boundary splitting, cycle accounting, probes, tracing and
+  host mutations interact in real runs? Measure before generalizing the
+  directed implementation.

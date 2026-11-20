@@ -153,6 +153,9 @@ for addr in 0x0343 0x0353; do
 done
 rm selfmod-overlap-test.c selfmod-overlap-test.ir selfmod-overlap.b33
 
+# Reproduce recorded opcode generations and initial preloaded code.
+bash generation-switch-test.sh "$bin"
+
 # Common IR behavior without language-card mode: recorded operand changes,
 # BRK/RTI with a ROM vector, and fall-through across $FFFF.
 compile_general_ir() {

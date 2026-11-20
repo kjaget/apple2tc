@@ -1,8 +1,9 @@
 # Code generations in generated C
 
-Status: living design document. This collects goals, evidence, and
-open questions; it does not select an implementation or authorize changing
-current behavior.
+Status: living design document. The first low-memory iteration and its
+test-driven steps are described in the [implementation plan](2026-11-20-code-generation-switching-implementation.md).
+Later questions and optimizations remain open. Record implementation findings
+and changes of direction here as the work progresses.
 
 ## Goal
 
@@ -92,6 +93,39 @@ every earlier opcode version, operand update, or physical bank is represented.
 In particular, a snapshot taken later under a different mapping can differ
 from the bytes seen when the instruction executed.
 
+### Existing recorded generation bytes
+
+The run-data JSON already contains useful byte contents for multiple
+generations, not just bitfields. Its `generations` array has an object per
+saved generation, each containing `regs` and a `code` array. Each code entry
+is a segment with an `addr` and a `bytes` array. The registers are captured
+when that generation is saved, not necessarily when its code first executed.
+For example, the committed [Robotron recording](../../decoded/robotron/robotron.json)
+contains these two segments at the same decimal address, 19566 (`$4C6E`):
+
+```json
+{"addr": 19566, "bytes": [96]}
+{"addr": 19566, "bytes": [165, 202]}
+```
+
+They occur in generations 1 and 2, respectively: `$60` (`RTS`) and `$A5 $CA`
+(`LDA $CA`). The recorded segments in the directed experiment likewise
+contain both `$A9 $11 $60` and `$A2 $22` at `$0900`. These bytes should be
+used as evidence and tested as input to generation-aware disassembly rather
+than discarded or recollected by default.
+
+The qualification is that each `code` array is a **partial saved segment
+set**, not a full memory snapshot or a complete instruction-by-instruction
+execution trace. Segment membership derives from the bitfields above, and
+the bytes are copied from memory at save time. Thus absence from a segment
+does not prove a byte was unchanged, unexecuted or inherited, and the segment
+does not by itself identify all instruction starts, operand changes or
+runtime transition conditions. Preloaded code and the original binary provide
+additional initial-state evidence; `FirstInstructions`, when present, provides
+the first observed bytes per PC, but not every later version. A generation-aware
+consumer should reuse these sources where sufficient, detect ambiguities, and
+require additional observations or recollection only when needed.
+
 [Disas::run](../../tools/apple2tc/Disas.cpp) currently loads recorded segments
 into one address space; in the non-language-card path, an overlapping segment is
 skipped. The language-card path fills previously unmapped portions, but does
@@ -147,6 +181,50 @@ second segment. It emits `LDA` at `$0900` with a dynamic operand, so the
 generated run instead leaves `$0201 = $00`. A future directed regression
 should compare both results and fail on this mismatch; it should not encode the
 current incorrect result as the desired behavior.
+
+### Current-branch directed fixtures
+
+The first implementation task adds two reproducible fixtures. From `tests/`,
+run `bash generation-switch-test.sh ../build` after building the tools. It
+assembles the programs, collects with `a2run --collect --limit=20`, checks
+interpreter snapshots and inspects fresh run-data. Run the optional
+`bash generation-switch-test.sh ../build --reproduce` to compare current
+Simple C with the interpreter; this currently exits with an error:
+
+```text
+Interpreter: $0200=11 $0201=22 $0202=11
+Generated:   $0200=11 $0201=00 $0202=11
+```
+
+In [`generation-switch.s`](../../tests/generation-switch.s), `$0900` executes
+`LDA #$11`, then `LDX #$22`, then the restored `LDA #$11`. At `$0380` the
+interpreter has A=`$11`, X=`$22`, Y=`$00`, SP=`$FF`, status=`$20`, and the
+three result bytes above. The recording contains:
+
+| Index | Saved PC | Segment at `$0900` | Reason |
+|---|---:|---|---|
+| 0 | `$0300` | none | Empty initial entry created when collection starts |
+| 1 | `$031E` | `$A9 $11 $60` | Saved before the opcode is replaced |
+| 2 | `$0330` | `$A2 $22` | Saved before the opcode is restored |
+| 3 | `$0380` | `$A9 $11` | Final save when the bounded collection stops |
+
+`$0902` remains the original `RTS`; it was executed each time but is absent
+from the later partial segments. `FirstInstructions` has `$A9 $11 $60` and
+`operandChanged=true` at `$0900`, and records the `RTS` at `$0902`. This
+flag compares later operand bytes with the first instruction's operand bytes,
+even when the opcode itself has changed; it is not a per-version operand
+history. The saved PCs identify collector events, not sufficient conditions
+for switching at runtime.
+
+[`generation-preloaded.s`](../../tests/generation-preloaded.s) first executes
+preloaded `$A9 $11 $60` at `$0400`, then replaces it with the longer
+`$AE $10 $02 $60` (`LDX $0210; RTS`). At `$0380` the interpreter has
+`$0200=$11`, `$0201=$22`, A=`$60`, X=`$22`, Y=`$00`, SP=`$FF`, and
+status=`$20`. Its initial generation is empty; the final saved segment
+contains only the replacement bytes. The original bytes are available in the
+input binary and `FirstInstructions`, not a saved code segment. This
+demonstrates both the usefulness and the incompleteness of the existing
+segments without establishing that every recording needs new fields.
 
 ### Existing programs
 
@@ -215,6 +293,46 @@ path and the host's memory mapping should be considered when designing such
 checks. A blanket runtime opcode fetch at every instruction is contrary to the
 optimization goal even if it is functionally tempting.
 
+### First iteration: tracking and transitions
+
+Start with a few directed, low-memory tests and generation-indexed tracking.
+An append-only list of bitfields is a reasonable baseline to measure: index 0
+represents the initial state, and each later index represents a subsequent
+observed code state. This is a proposed representation, not a claim that the
+collector's existing snapshot number already has that meaning. Its snapshots
+already contain byte segments and can provide versions of overwritten code,
+but are closed by a particular write-after-execution heuristic, can omit
+preloaded instructions, and carry neither a complete memory image nor
+per-generation control flow. First test how much can be reconstructed from
+these segments before adding new recorded data.
+
+Separate the questions of **observed facts** and **inherited state**. A set bit
+can mean written, executed, or present, but not the byte value or why it is
+present. Generation 0 must preserve the existing no-generation behavior;
+later states may copy the previous state or use explicit sparse overrides.
+For sparse lookup, distinguish an absent override (inherit) from an explicitly
+cleared bit or replaced byte. Compare correctness, construction time, lookup
+cost, and peak memory before choosing a more elaborate representation. No
+per-generation bitfield alone captures opcode bytes, instruction sizes, or
+per-version operand observations.
+
+Start with recorded low-memory transitions and investigate whether a
+statically identifiable instruction or short sequence can delimit each
+transition. A recorded PC is evidence of a possible boundary, not by itself
+proof that the same write occurred or that a whole overlay is ready. Test
+varying input and partial or repeated writes. If static evidence is
+insufficient, extend collection and run-data with the minimum facts needed;
+do not use collection time or the order of recorded generations as a runtime
+clock. Runtime selection must occur before affected code executes and reject
+unknown or ambiguous states, including changes within the current block.
+
+The first functional milestone may deliberately support a documented subset:
+known low-memory versions and transitions in directed fixtures. It must
+explicitly reject unsupported situations instead of executing stale code; it
+is not yet a general solution for independently changing regions or the
+language card. See the [implementation plan](2026-11-20-code-generation-switching-implementation.md)
+for the proposed tests, staged checks, and gates.
+
 ## Question 2: representing and sharing versions
 
 Here, **generation** is a useful conceptual name for a code version, not yet
@@ -247,6 +365,16 @@ overlapping entries, and block cycle totals can all differ between versions.
 An IR optimization or idiomatic replacement must not move effects across a
 transition or assume a version remains active beyond its validity.
 
+For the first functional iteration, use alternative 1 deliberately: one
+function and complete PC switch per materialized generation, with
+`run_emulated()` dispatching the active function. Retained blocks may be
+duplicated initially; measuring and removing this duplication is a later
+iteration, not a prerequisite for the first correct directed replay. The
+functions must preserve the existing PC, register, stack, cycle, debug, probe,
+and yield contracts. Whole-program snapshots cannot automatically represent
+unseen combinations of independently changing regions; diagnose those rather
+than treating a chronological index as a universal code identity.
+
 The record format may need more than the current byte segments and first
 instruction map: it must preserve enough information to generate the
 observed executable versions and distinguish operand variation from opcode
@@ -278,6 +406,11 @@ compatible with the low-memory solution rather than treating bank switching as
 a special substitute for general opcode replacement.
 
 ## Investigation and validation
+
+Keep this section and the implementation plan updated after each experiment:
+record the fixture, command or measurement, outcome, limitations, and the
+decision or new question it prompted. A result from breaking a task down is
+also a learning, even before code is written.
 
 1. Turn the directed low-memory example into a reproducible repository test.
    Verify the collector's snapshots as well as interpreter versus generated
@@ -325,6 +458,22 @@ a special substitute for general opcode replacement.
   and what diagnostic is produced when runtime execution exceeds that coverage?
 - Which parts can be introduced first in Simple C, and what must the shared
   representation expose for subsequent IR and readable-C work?
+
+## Planning notes
+
+- **2026-11-20:** Selected a test-driven, low-memory first iteration with
+  generation-indexed tracking and deliberately duplicated whole-generation
+  switches. Looking at the current collector showed that retaining its
+  bitfields per snapshot is not sufficient to recover preloaded code or
+  guarantee instruction bytes as actually executed. Existing saved segments
+  do already contain multiple byte versions; tests must establish when those,
+  initial-state information and existing observations suffice, and where
+  additional per-version or transition evidence is needed.
+- **2026-11-20:** `CYCLES` currently charges a whole block and dispatches
+  debug/probe events at its entry. Splitting blocks or exiting mid-block for
+  a transition needs explicit cycle and event tests, not just equivalent final
+  RAM. Moving dispatch into helper functions also needs to preserve
+  `branchTarget` and remaining-cycle state across calls.
 
 [blog-dynamic]: https://tmikov.blogspot.com/2021/12/apple2tc-apple-ii-binary-to-c_24.html
 [blog-ir]: https://tmikov.blogspot.com/2022/01/apple2tc-apple-ii-binary-to-c_23.html
