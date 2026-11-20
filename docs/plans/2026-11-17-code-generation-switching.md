@@ -408,6 +408,26 @@ regions for later selection, or be represented in some other way? Keep this
 compatible with the low-memory solution rather than treating bank switching as
 a special substitute for general opcode replacement.
 
+## A Note About ROM space
+
+There are a few ranges of memory which are a special case due to the specifics
+of Apple 2 hardware.  
+
+The region from $C000-$C0FF is the so-called soft switch range. This soft switch
+range is for memory mapped IO and is simply the source or destination of load and
+store addresess.  The PC will never execute from there, so there's no concept of 
+opcodes or operands being in this range. This also implies there's no way for
+opcodes or operands in the range to be set from run-data .json or to be changes
+via stores during program execution.
+
+The region from $C100-$CFFF is reserved for peripheral ROMs.  For example,
+the disk2 ROM loaded into $C600.  Code can be loaded here using special paths
+outside the emulated function of the CPU - in real life ROMs are a fixed 
+part of the hardware.  To emulate this there are special cases in the code
+to initialize their values at startup. But normal code execution (from PCs 
+either inside or outside the ROM range itself) can never modifiy opcodes
+or operands in this memory range.
+
 ## Investigation and validation
 
 Keep this section and the implementation plan updated after each experiment:
@@ -511,6 +531,36 @@ also a learning, even before code is written.
   address-space-crossing segments, and duplicate/overlapping ranges within a
   generation. Overlap across generations remains valid and is required by
   existing recordings. No run-data fields were added or versioned.
+- **2026-11-20, Task 4:** `apple2tc --generation-state=N --asm` is an opt-in
+  state inspector. It preserves input-binary bytes, fills only unmapped bytes
+  from `FirstInstructions`, then applies segments cumulatively through index N.
+  Executable observation bits and the byte's latest source state are kept
+  separately from the memory contents. Each invocation constructs a fresh CFG;
+  it does not import the recording's aggregate branch-target list or seed every
+  `FirstInstructions` PC as a block, which avoids stale starts when a longer
+  instruction covers an old entry. State 0 retains mapped input bytes.
+  Conflicting first observations on unmapped bytes are rejected with state and
+  PC diagnostics. The mode currently requires `FirstInstructions` and supports
+  low-memory ordinary-binary assembly output. First-instruction observations
+  at `$C000+` are ignored so normal ROM mapping can handle reachable code; a
+  saved segment in that range is rejected. ROM input, language-card mapping,
+  `--code-at`, `--inline-str`, `--no-gen`, and runtime dispatch are not
+  supported.
+- **2026-11-20, Task 4 fixture and measurement:** In
+  [`generation-state.s`](../../tests/generation-state.s), state 0 decodes
+  `$0400` as two-byte `LDA #$11` followed by `RTS` at `$0402`; state 1 overlays
+  a three-byte `LDA $0210` and `RTS` at `$0403`, and changes the `$0303` JMP
+  target from `$0402` to `$0403`. `$0402` is an aggregated recorded target but
+  is inside the new operand, so the state-1 CFG must not retain it. Both states
+  have four blocks; only the `$0300` JSR block has an identical body across
+  states. State 0 also seeds `$0900` code absent from the directed fixture's
+  input binary using `FirstInstructions`. Thirty process runs averaged 1.67 ms
+  and 1.63 ms for states 0 and 1; GNU `time` measured peak RSS of 4,572 KiB and
+  4,584 KiB. These process measurements include startup and are only a
+  small-fixture baseline.
+  Materialization is a cumulative patch view, not a complete snapshot: absence
+  from a segment still cannot establish that a byte was unchanged, and runtime
+  transition selection remains unresolved.
 - **2026-11-20:** `CYCLES` currently charges a whole block and dispatches
   debug/probe events at its entry. Splitting blocks or exiting mid-block for
   a transition needs explicit cycle and event tests, not just equivalent final

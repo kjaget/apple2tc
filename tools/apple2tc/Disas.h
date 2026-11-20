@@ -418,6 +418,10 @@ public:
     useFirstObserved_ = enabled;
   }
 
+  void setGenerationState(unsigned index) {
+    generationState_ = index;
+  }
+
   /// Record the inline-string routines declared with `--inline-str`.
   void setInlineStr(std::vector<uint16_t> addrs) {
     inlineStr_ = std::set<uint16_t>(addrs.begin(), addrs.end());
@@ -499,6 +503,8 @@ private:
   /// Merge the `--code-at` edges into runData_, creating it if there is no
   /// recording at all. Must run before the branch targets are turned into work.
   void applyCodeAt();
+  /// Build a cumulative code view without carrying CFG blocks between states.
+  void materializeGenerationState(unsigned index);
   /// Check that every `--code-at` edge actually landed: the target has to be the
   /// start of a block, and the origin has to be an instruction that can carry
   /// extra targets. Must run after the final identifyAsmBlocks().
@@ -555,6 +561,11 @@ private:
   std::string runDataPath_;
   bool languageCard_ = false;
   bool useFirstObserved_ = false;
+  std::optional<unsigned> generationState_{};
+  /// 0 is base memory, 1 is FirstInstructions, and n+2 is generation n.
+  std::vector<uint32_t> generationByteProvenance_{};
+  /// Bytes explicitly observed as part of executed instructions.
+  std::vector<bool> generationObservedBytes_{};
 
   /// Optional runtime execution data.
   std::unique_ptr<RuntimeData> runData_;

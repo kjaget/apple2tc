@@ -421,10 +421,116 @@ void Disas::validateCodeAt() const {
   }
 }
 
+void Disas::materializeGenerationState(unsigned index) {
+  if (!runData_ || !runData_->firstInstructions || runData_->firstInstructions->empty())
+    throw std::runtime_error(
+        "--generation-state requires non-empty FirstInstructions run-data");
+  if (index >= runData_->generations.size())
+    throw std::runtime_error(format(
+        "--generation-state %u is unavailable; recording has %zu states",
+        index,
+        runData_->generations.size()));
+
+  generationByteProvenance_.assign(0x10000, 0);
+  generationObservedBytes_.assign(0x10000, false);
+  std::vector<bool> seededUnmapped(0x10000, false);
+  std::vector<uint16_t> firstPC(0x10000, 0);
+
+  for (const auto &[pc, instruction] : *runData_->firstInstructions) {
+    if (pc >= A2_IO_RANGE_START)
+      continue;
+    CPUInst inst = decodeInst(pc, instruction.bytes);
+    if ((uint32_t)pc + inst.size > A2_IO_RANGE_START)
+      throw std::runtime_error(format(
+          "--generation-state %u cannot materialize instruction crossing $C000 at $%04X",
+          index,
+          pc));
+    bool hasMappedByte = false;
+    bool hasUnmappedByte = false;
+    bool mappedByteDiffers = false;
+    for (unsigned i = 0; i < inst.size; ++i) {
+      uint16_t addr = (uint16_t)(pc + i);
+      bool mapped = findMemRange(addr) != memRanges_.end();
+      hasMappedByte |= mapped;
+      hasUnmappedByte |= !mapped;
+      mappedByteDiffers |= mapped && memory_[addr] != instruction.bytes.d[i];
+    }
+    if (hasMappedByte && hasUnmappedByte && mappedByteDiffers)
+      throw std::runtime_error(format(
+          "--generation-state %u cannot combine binary and first-observed bytes for "
+          "instruction at $%04X",
+          index,
+          pc));
+
+    for (unsigned i = 0; i < inst.size; ++i) {
+      uint16_t addr = (uint16_t)(pc + i);
+      uint8_t byte = instruction.bytes.d[i];
+      generationObservedBytes_[addr] = true;
+      if (findMemRange(addr) != memRanges_.end())
+        continue;
+      generationByteProvenance_[addr] = 1;
+      if (seededUnmapped[addr] && memory_[addr] != byte)
+        throw std::runtime_error(format(
+            "--generation-state %u has conflicting first-observed bytes at $%04X "
+            "(instruction PCs $%04X and $%04X)",
+            index,
+            addr,
+            firstPC[addr],
+            pc));
+      if (!seededUnmapped[addr]) {
+        memory_[addr] = byte;
+        seededUnmapped[addr] = true;
+        firstPC[addr] = pc;
+      }
+    }
+  }
+
+  for (unsigned generation = 0; generation <= index; ++generation) {
+    for (const auto &segment : runData_->generations[generation].code) {
+      if ((uint32_t)segment.addr + segment.bytes.size() > A2_IO_RANGE_START)
+        throw std::runtime_error(format(
+            "--generation-state %u cannot materialize upper-memory segment at $%04X",
+            index,
+            segment.addr));
+      for (size_t i = 0; i < segment.bytes.size(); ++i) {
+        uint16_t addr = (uint16_t)(segment.addr + i);
+        memory_[addr] = segment.bytes[i];
+        generationByteProvenance_[addr] = generation + 2;
+        generationObservedBytes_[addr] = true;
+      }
+    }
+  }
+
+  for (uint32_t addr = 0; addr < 0x10000;) {
+    if (!generationByteProvenance_[addr] || findMemRange((uint16_t)addr) != memRanges_.end()) {
+      ++addr;
+      continue;
+    }
+    uint32_t from = addr++;
+    while (addr < 0x10000 && generationByteProvenance_[addr] &&
+           findMemRange((uint16_t)addr) == memRanges_.end())
+      ++addr;
+    addMemRange(MemRange((uint16_t)from, (uint16_t)(addr - 1), true));
+  }
+
+  printf(
+      "// Materialized generation state %u from first observations and segment overrides\n",
+      index);
+}
+
 void Disas::run(bool noGenerations) {
   // Load the start address from runtime data, if available.
   if (!runDataPath_.empty())
     runData_ = RuntimeData::load(runDataPath_);
+
+  if (generationState_ && noGenerations)
+    throw std::runtime_error("--generation-state cannot be combined with --no-gen");
+  if (generationState_ && languageCard_)
+    throw std::runtime_error("--generation-state does not support --language-card");
+  if (generationState_ && !codeAt_.empty())
+    throw std::runtime_error("--generation-state does not support --code-at");
+  if (generationState_ && !inlineStr_.empty())
+    throw std::runtime_error("--generation-state does not support --inline-str");
 
   const bool hasRecording = runData_ != nullptr;
   if (languageCard_ && !runData_) {
@@ -440,7 +546,7 @@ void Disas::run(bool noGenerations) {
     if (hasRecording)
       std::fill(recordedOnly_.begin() + 0xD000, recordedOnly_.end(), true);
   }
-  if (useFirstObserved_ && runData_ && runData_->firstInstructions)
+  if (!generationState_ && useFirstObserved_ && runData_ && runData_->firstInstructions)
     for (const auto &[addr, instruction] : *runData_->firstInstructions)
       observedCode_.emplace(addr, instruction.bytes);
   if (languageCard_ && !runData_->languageCardStart->powerOn) {
@@ -482,7 +588,9 @@ void Disas::run(bool noGenerations) {
   addWork(*start_, nullptr)->setName("START");
 
   // Just naively load all runtime data generations.
-  if (!noGenerations && runData_) {
+  if (generationState_) {
+    materializeGenerationState(*generationState_);
+  } else if (!noGenerations && runData_) {
     unsigned genIndex = 0;
     for (const auto &gen : runData_->generations) {
       // printf("// Generation %u\n", genIndex++);
@@ -526,7 +634,7 @@ void Disas::run(bool noGenerations) {
 
   identifyAsmBlocks();
 
-  if (runData_) {
+  if (runData_ && !generationState_) {
     unsigned newBlocks = 0;
     for (auto addr : runData_->branchTargets) {
       AsmBlock *block = addWork(addr, nullptr);

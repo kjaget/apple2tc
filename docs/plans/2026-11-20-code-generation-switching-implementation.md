@@ -230,28 +230,41 @@ transition conditions; those require Task 4's state model.
 
 **Files:** [`RuntimeData.cpp`](../../tools/apple2tc/RuntimeData.cpp),
 [`Disas.h`](../../tools/apple2tc/Disas.h),
-[`Disas.cpp`](../../tools/apple2tc/Disas.cpp), focused tests.
+[`Disas.cpp`](../../tools/apple2tc/Disas.cpp),
+[`apple2tc.cpp`](../../tools/apple2tc/apple2tc.cpp), focused tests.
 
-- [ ] Write a test that loads a small, unambiguous multi-state recording and
+- [x] Write a test that loads a small, unambiguous multi-state recording and
       checks instruction starts, bytes, decoded sizes and CFG successors for
       each state. Check that unchanged code remains present and a changed
       length does not inherit stale starts or edges.
-- [ ] Add a per-state code view for the opt-in path, initially materializing
-      copies of the previous view plus existing segment bytes as explicit
-      overrides when the evidence permits it. Keep executable observations
-      distinct from data bytes and state provenance; a copied bit cannot
-      manufacture an observed opcode. Rebuild or correctly invalidate
-      affected CFGs and overlapping entries.
-- [ ] Ensure state 0 follows the existing no-generation decode behavior where
-      applicable, and leave the existing single-state path and old recordings
-      alone. Reject ambiguous/incomplete evidence in the new path with the
-      offending state and PC in the diagnostic.
-- [ ] Test explicit clearing/invalidation, inherited code, preloaded code,
-      different instruction sizes and an overlapping entry. Record peak memory,
-      generation time and duplicated block count for later comparison.
+- [x] Add an opt-in `--generation-state=N` code view. Each invocation starts
+      with the input memory, fills only unmapped bytes from `FirstInstructions`,
+      then applies segment overrides from state 0 through N. Keep executed-byte
+      observation and byte-source provenance separate from the memory image.
+      Disassemble each selected view with a fresh CFG; aggregate branch targets
+      and first-observed starts from other states are not imported.
+- [x] Ensure state 0 preserves mapped input bytes and leaves the existing
+      single-state path and old recordings alone. The new mode requires
+      `FirstInstructions`, rejects conflicting first observations with the
+      state and byte/PC in the diagnostic, and rejects unsupported language
+      card, ROM, hand-asserted edge, and `--no-gen` combinations.
+- [x] Test inherited code, preloaded bytes, changed instruction sizes, and the
+      old `$0402` entry becoming an operand in the new state. Rebuilding the
+      CFG removes that stale start and edge without inventing a memory clear.
+      In the two-state fixture each state has four blocks; one block body
+      (`$0300` JSR) is identical across states. The directed fixture also
+      verifies that `$0900` code absent from the input binary is seeded from
+      `FirstInstructions`. Thirty process runs averaged 1.67 ms for state 0
+      and 1.63 ms for state 1; peak RSS was 4,572 KiB and 4,584 KiB,
+      respectively. These are small-fixture process measurements, not
+      representative game-generation costs.
 
-**Done:** tests can inspect distinct correct static CFGs at the same PC; no
-runtime dispatch or changed default output is needed yet.
+**Done:** tests can inspect distinct static CFGs at the same PC; no runtime
+dispatch or changed default output is needed yet. The opt-in view is still a
+cumulative patch model, not proof of a complete runtime memory state. In
+particular, unchanged input bytes are retained and only recorded segments
+override them; transition selection, language-card mappings, and general
+state completeness remain for later tasks.
 
 ### 5. Find and validate transition evidence
 

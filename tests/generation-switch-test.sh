@@ -9,14 +9,18 @@ fi
 build=$(cd "$1" && pwd)
 cd "$(dirname "$0")"
 tmp=$(mktemp -d)
-trap 'rm -f "$tmp/switch.b33" "$tmp/preloaded.b33" "$tmp/switch.ram" \
+trap 'rm -f "$tmp/switch.b33" "$tmp/preloaded.b33" "$tmp/states.b33" "$tmp/switch.ram" \
   "$tmp/switch.ram.regs" "$tmp/preloaded.ram" "$tmp/preloaded.ram.regs" \
-  "$tmp/switch.json" "$tmp/preloaded.json" "$tmp/switch.log" "$tmp/preloaded.log" \
+  "$tmp/switch.json" "$tmp/preloaded.json" "$tmp/states.json" \
+  "$tmp/switch-state0.asm" "$tmp/state0.asm" "$tmp/state1.asm" "$tmp/state2.asm" \
+  "$tmp/state-error.json" \
+  "$tmp/switch.log" "$tmp/preloaded.log" \
   "$tmp/generation-switch-generated.c" "$tmp/generate.log" "$tmp/driver.o" \
   "$tmp/generated-run" "$tmp/generated.out"; rmdir "$tmp"' EXIT
 
 "$build/tools/a6502/a6502" generation-switch.s "$tmp/switch.b33"
 "$build/tools/a6502/a6502" generation-preloaded.s "$tmp/preloaded.b33"
+"$build/tools/a6502/a6502" generation-state.s "$tmp/states.b33"
 for name in switch preloaded; do
   if ! "$build/tools/a2run/a2run" "$tmp/$name.b33" --collect --limit=20 --frames=150 \
       --snapshot-at=0380 --snapshot-out="$tmp/$name.ram" --out="$tmp/$name.json" \
@@ -29,6 +33,7 @@ done
 python3 - "$tmp" "$build/tools/apple2tc/apple2tc" <<'PY'
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -150,6 +155,113 @@ with tempfile.TemporaryDirectory(dir=tmp) as invalid_dir:
              f"--run-data={path}"],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         assert result.returncode != 0 and message in result.stderr, (name, result.stderr)
+
+regs = dict(pc=0x300, a=0, x=0, y=0, status=0x20, sp=0xff)
+states = {
+    "BranchTargets": [0x402],
+    "Branches": {"771": [0x402]},
+    "FirstInstructions": [
+        [0x300, 0x20, 0x00, 0x04, False],
+        [0x303, 0x4c, 0x02, 0x04, False],
+        [0x400, 0xa9, 0x11, 0x60, False],
+        [0x402, 0x60, 0x00, 0x00, False],
+    ],
+    "generations": [
+        {"regs": regs, "code": []},
+        {"regs": regs, "code": [
+            {"addr": 0x303, "bytes": [0x4c, 0x03, 0x04]},
+            {"addr": 0x400, "bytes": [0xad, 0x10, 0x02, 0x60]},
+        ]},
+    ],
+}
+states_path = tmp / "states.json"
+states_path.write_text(json.dumps(states))
+
+def disassemble_state(index, data_path=states_path):
+    output = tmp / f"state{index}.asm"
+    with output.open("w") as stream:
+        result = subprocess.run(
+            [str(apple2tc), str(tmp / "states.b33"), "--asm",
+             f"--run-data={data_path}", f"--generation-state={index}"],
+            stdout=stream, stderr=subprocess.PIPE, text=True)
+    return result, output.read_text()
+
+state0_result, state0 = disassemble_state(0)
+state1_result, state1 = disassemble_state(1)
+assert state0_result.returncode == 0, state0_result.stderr
+assert state1_result.returncode == 0, state1_result.stderr
+
+def has_instruction(listing, addr, mnemonic, operand=None):
+    for line in listing.splitlines():
+        if not line.startswith(f"/*{addr:04X}*/"):
+            continue
+        if not re.search(rf"\s{mnemonic}\b", line):
+            continue
+        if operand is None or operand in line:
+            return True
+    return False
+
+def expect_instruction(listing, addr, mnemonic, operand=None):
+    if not has_instruction(listing, addr, mnemonic, operand):
+        matching = [line for line in listing.splitlines()
+                    if line.startswith(f"/*{addr:04X}*/")]
+        raise AssertionError(
+            f"missing ${addr:04X} {mnemonic} {operand or ''}; lines={matching}")
+
+switch_state0_path = tmp / "switch-state0.asm"
+with switch_state0_path.open("w") as stream:
+    switch_state0_result = subprocess.run(
+        [str(apple2tc), str(tmp / "switch.b33"), "--asm",
+         f"--run-data={tmp / 'switch.json'}", "--generation-state=0"],
+        stdout=stream, stderr=subprocess.PIPE, text=True)
+switch_state0 = switch_state0_path.read_text()
+assert switch_state0_result.returncode == 0, switch_state0_result.stderr
+expect_instruction(switch_state0, 0x900, "LDA", "#$11")
+
+expect_instruction(state0, 0x300, "JSR", "L_0400")
+expect_instruction(state0, 0x303, "JMP", "L_0402")
+expect_instruction(state0, 0x400, "LDA", "#$11")
+expect_instruction(state0, 0x402, "RTS")
+expect_instruction(state1, 0x300, "JSR", "L_0400")
+expect_instruction(state1, 0x303, "JMP", "L_0403")
+expect_instruction(state1, 0x400, "LDA", "M_0210")
+expect_instruction(state1, 0x403, "RTS")
+assert not has_instruction(state1, 0x402, "RTS"), [
+    line for line in state1.splitlines() if line.startswith("/*0402*/")]
+
+unavailable, _ = disassemble_state(2)
+assert (unavailable.returncode != 0 and
+        "--generation-state 2 is unavailable" in unavailable.stderr), \
+    (unavailable.returncode, unavailable.stderr)
+
+incomplete = dict(states)
+del incomplete["FirstInstructions"]
+incomplete_path = tmp / "state-error.json"
+incomplete_path.write_text(json.dumps(incomplete))
+missing_observations, _ = disassemble_state(0, incomplete_path)
+assert missing_observations.returncode != 0 and \
+    "requires non-empty FirstInstructions" in missing_observations.stderr
+
+ambiguous = dict(states)
+ambiguous["FirstInstructions"] = states["FirstInstructions"] + [
+    [0x500, 0xad, 0x34, 0x12, False],
+    [0x501, 0xea, 0x00, 0x00, False],
+]
+incomplete_path.write_text(json.dumps(ambiguous))
+conflicting_observations, _ = disassemble_state(0, incomplete_path)
+assert conflicting_observations.returncode != 0 and \
+    "--generation-state 0 has conflicting first-observed bytes at $0501" in \
+    conflicting_observations.stderr
+
+upper_memory = dict(states)
+upper_memory["generations"] = [dict(generation) for generation in states["generations"]]
+upper_memory["generations"][1]["code"] = [
+    {"addr": 0xd000, "bytes": [0xea]},
+]
+incomplete_path.write_text(json.dumps(upper_memory))
+unsupported_upper_memory, _ = disassemble_state(1, incomplete_path)
+assert unsupported_upper_memory.returncode != 0 and \
+    "cannot materialize upper-memory segment at $D000" in unsupported_upper_memory.stderr
 
 print("Generation interpreter and recording checks passed")
 PY

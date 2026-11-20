@@ -10,7 +10,9 @@
 
 #include "apple2tc/support.h"
 
+#include <charconv>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
 #include <tuple>
 
@@ -76,6 +78,7 @@ static void printHelp() {
   fprintf(stderr, "  --coverage=f        Write a code/data coverage report to file\n");
   fprintf(stderr, "  --known-data=f      Declare 'from to name' data ranges for --coverage\n");
   fprintf(stderr, "  --no-gen            Ignore runtime generations\n");
+  fprintf(stderr, "  --generation-state=n Select a cumulative state for --asm\n");
 }
 
 int main(int argc, char **argv) {
@@ -105,6 +108,7 @@ int main(int argc, char **argv) {
   std::string inlineStrPath;
   std::string coveragePath;
   std::string knownDataPath;
+  std::optional<unsigned> generationState;
   bool rom = false;
   for (int i = 1; i < argc; ++i) {
     if (strncmp(argv[i], "-v", 2) == 0 && strlen(argv[i]) == 3 && isdigit(argv[i][2])) {
@@ -167,6 +171,18 @@ int main(int argc, char **argv) {
       noGenerations = true;
       continue;
     }
+    constexpr char generationStateArg[] = "--generation-state=";
+    if (strncmp(argv[i], generationStateArg, sizeof(generationStateArg) - 1) == 0) {
+      const char *value = argv[i] + sizeof(generationStateArg) - 1;
+      unsigned index;
+      auto result = std::from_chars(value, value + strlen(value), index);
+      if (value == result.ptr || result.ec != std::errc{} || *result.ptr) {
+        fprintf(stderr, "Invalid --generation-state index: %s\n", value);
+        return 2;
+      }
+      generationState = index;
+      continue;
+    }
     if (strncmp(argv[i], "--routines-report=", 18) == 0) {
       routinesReportPath = argv[i] + 18;
       continue;
@@ -220,6 +236,17 @@ int main(int argc, char **argv) {
     fprintf(stderr, "--coverage is not supported with --language-card\n");
     return 2;
   }
+  if (generationState && action != Action::GenAsm) {
+    fprintf(stderr, "--generation-state currently supports only --asm output\n");
+    return 2;
+  }
+  if (generationState &&
+      (noGenerations || languageCard || rom || !codeAtPath.empty() || !inlineStrPath.empty())) {
+    fprintf(stderr,
+            "--generation-state cannot be combined with --no-gen, --language-card, --rom, "
+            "--code-at, or --inline-str\n");
+    return 2;
+  }
 
   // Load the input binary.
   auto [binary, start] = loadInputBinary(inputPath.c_str(), rom);
@@ -228,6 +255,8 @@ int main(int argc, char **argv) {
     auto dis = std::make_shared<Disas>(runDataPath);
     dis->setLanguageCard(languageCard);
     dis->setUseFirstObserved(action != Action::GenAsm);
+    if (generationState)
+      dis->setGenerationState(*generationState);
     if (!codeAtPath.empty())
       dis->setCodeAt(loadCodeAt(codeAtPath));
     if (!inlineStrPath.empty()) {
