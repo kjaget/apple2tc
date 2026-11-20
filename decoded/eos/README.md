@@ -16,6 +16,32 @@ Re-run the `ninja` command after changing `eos.c`. The build needs CMake, Ninja,
 a C11/C++17 compiler and the platform dependencies listed in the
 [project README](../../README.md#building).
 
+## Generate the C output
+
+Build the decompiler with `ninja -C build apple2tc`, then run this from the
+`build` directory:
+
+```shell
+tools/apple2tc/apple2tc --simple-c \
+  --code-at=eos_code_at.txt --run-data=eos.json \
+  --language-card \
+  /home/ubuntu/eos/trace_3_no_boring_gen2_gen01_block01_0000_0001.b33 > eos.c
+```
+
+and 
+
+```shell
+tools/apple2tc/apple2tc --irc1 -O1 \
+  --code-at=eos_code_at.txt --run-data=eos.json \
+  --language-card \
+  /home/ubuntu/eos/trace_3_no_boring_gen2_gen01_block01_0000_0001.b33 > eos.c
+```
+
+This uses `eos_code_at.txt` and `eos.json` in `build` and an external `.b33`
+input; adjust the paths as needed. It writes `build/eos.c`, not the source in
+this directory. Review the output before replacing `decoded/eos/eos.c`, which
+may contain manual changes.
+
 ## Run
 
 From the `build` directory:
@@ -31,21 +57,6 @@ Replace the paths with the locations of your disk images. The program opens a
 window; drive 1 starts with the boot disk and drive 2 with the archive disk.
 Press F9 to swap drive 2 between the archive and mission disks.
 
-## Generate the C output
-
-Build the decompiler with `ninja -C build apple2tc`, then run this from the
-`build` directory:
-
-```shell
-tools/apple2tc/apple2tc --simple-c -O3 \
-  --code-at=eos_code_at.txt --run-data=1.json \
-  /home/ubuntu/eos/trace_3_no_boring_gen2_gen01_block01_0000_0001.b33 > eos.c
-```
-
-This uses `eos_code_at.txt` and `1.json` in `build` and an external `.b33`
-input; adjust the paths as needed. It writes `build/eos.c`, not the source in
-this directory. Review the output before replacing `decoded/eos/eos.c`, which
-may contain manual changes.
 
 ### Experimental language-card support
 
@@ -58,15 +69,20 @@ To generate code using recorded card state and upper-memory instructions, first
 make a new recording with the rebuilt `a2run`. From `build`:
 
 ```shell
-tools/a2run/a2run --collect --from-rom --preload --frames=5000 --out=eos.json --key-file=eos.keys \
+tools/a2run/a2run --collect --from-rom --preload --frames=5000 --out=eos.json \
+  --key-file=eos.keys \
   --disk1=/home/ubuntu/eos/EOS_Crack/d1_boot.dsk \
   --disk2=/home/ubuntu/eos/EOS_Crack/d2_archive.dsk \
   --disk2-alt=/home/ubuntu/eos/EOS_Crack/d3_mission.dsk \
   /home/ubuntu/eos/trace_3_no_boring_gen2_gen01_block01_0000_0001.b33
 
-tools/apple2tc/apple2tc --simple-c -O3 --language-card \
+tools/apple2tc/apple2tc --simple-c --language-card \
   --code-at=eos_code_at.txt --run-data=eos.json \
-  /home/ubuntu/eos/trace_3_no_boring_gen2_gen01_block01_0000_0001.b33 > eos-lc.c
+  /home/ubuntu/eos/trace_3_no_boring_gen2_gen01_block01_0000_0001.b33 > eos.c
+
+tools/apple2tc/apple2tc --irc1 -O1 --language-card \
+  --code-at=eos_code_at.txt --run-data=eos.json \
+  /home/ubuntu/eos/trace_3_no_boring_gen2_gen01_block01_0000_0001.b33 > eos-irc1.c
 ```
 
 For optimized IR-based C instead, use:
