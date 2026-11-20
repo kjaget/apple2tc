@@ -263,6 +263,10 @@ assert first[0x03C0][:3] == [0xAD, 0x34, 0x12] and first[0x03C0][3] is True
 assert first[0xD000][:2] == [0xA9, 0x11] and first[0xD000][3] is True
 assert first[0xD002][0] == 0x60 and first[0xD002][3] is False
 assert first[0x0300][3] is False
+for addr in (0x0380, 0x03C0):
+    assert not any(segment["addr"] <= addr < segment["addr"] + len(segment["bytes"])
+                   for generation in recording["generations"] for segment in generation["code"]), \
+        f"operand-only changes at ${addr:04X} must not create opcode snapshots"
 PY
 $apple2tc operand-observed.b33 --simple-c --language-card \
   --run-data=operand-observed.json > language-card-generated.c

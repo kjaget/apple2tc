@@ -16,6 +16,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
+#include <map>
 #include <stdexcept>
 
 using json = nlohmann::json;
@@ -51,6 +53,29 @@ static Regs loadRegs(const json &jsonRegs) {
       .status = jsonRegs["status"],
       .sp = jsonRegs["sp"],
   };
+}
+
+static uint16_t loadSegmentAddress(const json &value, const std::string &path) {
+  if (!value.is_number_integer() || value < 0 || value > 0xFFFF)
+    throw std::runtime_error("Invalid generation segment address in " + path);
+  return value.get<uint16_t>();
+}
+
+static std::vector<uint8_t>
+loadSegmentBytes(const json &value, uint16_t addr, const std::string &path) {
+  if (!value.is_array() || value.empty())
+    throw std::runtime_error("Invalid generation segment bytes in " + path);
+  if (value.size() > 0x10000u - addr)
+    throw std::runtime_error("Generation segment exceeds address space in " + path);
+
+  std::vector<uint8_t> bytes;
+  bytes.reserve(value.size());
+  for (const auto &entry : value) {
+    if (!entry.is_number_integer() || entry < 0 || entry > 0xFF)
+      throw std::runtime_error("Invalid generation segment byte in " + path);
+    bytes.push_back(entry.get<uint8_t>());
+  }
+  return bytes;
 }
 
 std::unique_ptr<RuntimeData> RuntimeData::load(const std::string &path) {
@@ -153,14 +178,31 @@ std::unique_ptr<RuntimeData> RuntimeData::load(const std::string &path) {
     }
   }
 
-  for (const json &jgen : root["generations"]) {
+  const json &jsonGenerations = root["generations"];
+  if (!jsonGenerations.is_array())
+    throw std::runtime_error("Invalid generations in " + path);
+  for (const json &jgen : jsonGenerations) {
+    if (!jgen.is_object() || !jgen.contains("regs") || !jgen.contains("code") ||
+        !jgen["code"].is_array())
+      throw std::runtime_error("Invalid generation in " + path);
     res->generations.emplace_back();
 
-    const auto &jregs = jgen["regs"];
     res->generations.back().regs = loadRegs(jgen["regs"]);
 
+    std::map<uint32_t, uint32_t> ranges;
     for (const json &jseg : jgen["code"]) {
-      res->generations.back().code.push_back(Segment{.addr = jseg["addr"], .bytes = jseg["bytes"]});
+      if (!jseg.is_object() || !jseg.contains("addr") || !jseg.contains("bytes"))
+        throw std::runtime_error("Invalid generation code segment in " + path);
+      uint16_t addr = loadSegmentAddress(jseg["addr"], path);
+      std::vector<uint8_t> bytes = loadSegmentBytes(jseg["bytes"], addr, path);
+      uint32_t end = addr + bytes.size();
+      auto next = ranges.lower_bound(addr);
+      if ((next != ranges.end() && next->first < end) ||
+          (next != ranges.begin() && std::prev(next)->second > addr))
+        throw std::runtime_error("Overlapping generation code segments in " + path);
+      ranges.emplace(addr, end);
+      res->generations.back().code.push_back(
+          Segment{.addr = addr, .bytes = std::move(bytes)});
     }
   }
 

@@ -187,39 +187,44 @@ replacing copies.
 
 ### 3. Reuse recorded bytes and fill demonstrated gaps
 
-**Files:** collector and serializer; focused collection tests; living design.
+**Files:** runtime-data loader; focused collection tests; living design.
 
-- [ ] Write tests that consume the existing segment bytes for the directed
+- [x] Write tests that consume the existing segment bytes for the directed
       fixture and Robotron's `$4C6E` versions. Combine them with binary and
       first-instruction data where applicable. Check which versions, sizes and
       operand changes can actually be established; assert a changed operand
       alone is not treated as a new opcode version.
-- [ ] Add cases for preloaded code, a changed operand before a later snapshot,
+- [x] Add cases for preloaded code, a changed operand before a later snapshot,
       restoration and partial overwrites. Identify the precise information
       missing from the existing fields; do not infer executed bytes solely from
       `saveGeneration()`'s later `getMainRAM()` snapshot.
-- [ ] If the tests demonstrate a gap that cannot be closed from existing data,
+- [x] If the tests demonstrate a gap that cannot be closed from existing data,
       capture only the missing facts at execution or another justified point.
       Preserve the legacy `FirstInstructions` and `generations` fields; avoid
       adding a duplicate full instruction history without a demonstrated need.
-- [ ] Use fixture traces to define and test when to append a tracking entry:
-      explicitly state what is inherited, overridden, and considered observed.
-      Distinguish a chronological observation from a complete, selectable
-      state. Include reset, no writes, restoration and a partially overwritten
-      instruction. If the current trigger cannot determine a state boundary,
-      preserve the raw observations and record the ambiguity instead of
-      manufacturing one.
-- [ ] Validate segment ranges and any added schema for malformed, missing,
-      duplicate and out-of-range data. Version or explicitly mark new fields
-      if required. Legacy loading stays unchanged. Generation-aware mode should
-      accept existing recordings when evidence suffices; otherwise explain
-      the specific missing evidence and whether recollection is needed, rather
-      than guessing missing instruction history.
+      The fixtures show no missing byte fact for these cases, so no new
+      collection field was added.
+- [x] Use fixture traces to define what a tracking entry would mean. A saved
+      segment is a chronological observation of bytes marked executable at a
+      pre-write save or final collection, not a complete/selectable memory
+      state. Seed known bytes from the binary or `FirstInstructions`, then
+      override only bytes explicitly present in ordered segments; do not infer
+      inheritance outside that tested model. Keep production collection on
+      tracking entry 0 rather than equating partial JSON snapshots with
+      indexed tracking entries. Reset, empty initial snapshots, restoration
+      and partial overwrites are covered; entry creation for complete
+      selectable states remains for Task 4.
+- [x] Validate existing generation-segment structure for missing fields,
+      invalid addresses/bytes, address-space overflow, duplicate and overlapping
+      ranges. No schema was added, so no version marker is needed. Valid
+      existing recordings remain accepted; malformed run-data now fails with
+      a specific diagnostic.
 
 **Done:** tests show what existing recordings can support, supplemented only
-where necessary, with round-trip and invalid-input tests for changed formats.
-Legacy generation is unchanged. Document what the evidence does *not* prove
-about transitions.
+where necessary. The current fixtures need no additional observation field.
+Legacy `FirstInstructions` and `generations` remain unchanged. The evidence
+does *not* prove complete memory states, general inheritance, or runtime
+transition conditions; those require Task 4's state model.
 
 ### 4. Materialize and disassemble independent code states
 

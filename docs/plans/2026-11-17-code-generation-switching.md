@@ -492,6 +492,25 @@ also a learning, even before code is written.
   do already contain multiple byte versions; tests must establish when those,
   initial-state information and existing observations suffice, and where
   additional per-version or transition evidence is needed.
+- **2026-11-20, Task 3:** Tests combining input binaries, `FirstInstructions`,
+  and ordered generation segments establish the directed low-memory versions,
+  the preloaded-to-longer-instruction replacement, and Robotron's `$4C6E`
+  opcode/size change. The directed trace's partial segments preserve the
+  unchanged `$0902` RTS only when overlaid on bytes already known from
+  `FirstInstructions`; the preloaded trace needs its input binary to establish
+  the initial `$0400` instruction. Operand-only changes at `$0380` and `$03C0`
+  set `operandChanged` but produce no executable segments at those PCs. These
+  examples need no new recording field, but do not prove complete memory
+  states or general inheritance: absence from a segment remains unknown.
+  Accordingly, production collection still uses tracking entry 0; a
+  chronological partial segment is not assigned to a complete indexed state.
+  Entry creation for selectable states is deferred until Task 4 defines and
+  tests materialization semantics.
+- **2026-11-20, Task 3 validation:** `RuntimeData::load` now rejects missing
+  generation/segment fields, invalid addresses or bytes, empty or
+  address-space-crossing segments, and duplicate/overlapping ranges within a
+  generation. Overlap across generations remains valid and is required by
+  existing recordings. No run-data fields were added or versioned.
 - **2026-11-20:** `CYCLES` currently charges a whole block and dispatches
   debug/probe events at its entry. Splitting blocks or exiting mid-block for
   a transition needs explicit cycle and event tests, not just equivalent final

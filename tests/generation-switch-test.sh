@@ -26,12 +26,15 @@ for name in switch preloaded; do
   fi
 done
 
-python3 - "$tmp" <<'PY'
+python3 - "$tmp" "$build/tools/apple2tc/apple2tc" <<'PY'
 import json
 import pathlib
+import subprocess
 import sys
+import tempfile
 
 tmp = pathlib.Path(sys.argv[1])
+apple2tc = pathlib.Path(sys.argv[2])
 
 def read_case(name, expected_ram, expected_a):
     ram = (tmp / f"{name}.ram").read_bytes()
@@ -58,6 +61,21 @@ first = {entry[0]: entry[1:] for entry in switch["FirstInstructions"]}
 assert first[0x900] == [0xa9, 0x11, 0x60, True]
 assert first[0x902][0] == 0x60
 
+memory = bytearray(0x10000)
+memory[0x900:0x903] = bytes(first[0x900][:3])
+switch_states = []
+for generation in switch["generations"]:
+    for segment in generation["code"]:
+        addr = segment["addr"]
+        memory[addr:addr + len(segment["bytes"])] = bytes(segment["bytes"])
+    switch_states.append(bytes(memory[0x900:0x903]))
+assert switch_states == [
+    bytes([0xa9, 0x11, 0x60]),
+    bytes([0xa9, 0x11, 0x60]),
+    bytes([0xa2, 0x22, 0x60]),
+    bytes([0xa9, 0x11, 0x60]),
+], "partial segments must retain unchanged instruction bytes"
+
 preloaded = read_case("preloaded", [0x11, 0x22], 0x60)
 first = {entry[0]: entry[1:] for entry in preloaded["FirstInstructions"]}
 assert first[0x400][:3] == [0xa9, 0x11, 0x60]
@@ -67,11 +85,72 @@ assert any(data[:4] == [0xae, 0x10, 0x02, 0x60]
            for _, data in segments_at(preloaded, 0x400))
 binary = (tmp / "preloaded.b33").read_bytes()
 start = int.from_bytes(binary[:2], "little")
-assert binary[4 + 0x400 - start:4 + 0x403 - start] == bytes([0xa9, 0x11, 0x60])
+initial_code = binary[4 + 0x400 - start:4 + 0x403 - start]
+assert initial_code == bytes([0xa9, 0x11, 0x60])
+assert initial_code == bytes(first[0x400][:3])
+memory = bytearray(0x10000)
+memory[start:start + len(binary[4:])] = binary[4:]
+assert memory[0x400:0x403] == initial_code
+for generation in preloaded["generations"]:
+    for segment in generation["code"]:
+        addr = segment["addr"]
+        memory[addr:addr + len(segment["bytes"])] = bytes(segment["bytes"])
+assert memory[0x400:0x404] == bytes([0xae, 0x10, 0x02, 0x60])
 
 with open("../decoded/robotron/robotron.json") as f:
     robotron = json.load(f)
-assert [data[:2] for _, data in segments_at(robotron, 0x4c6e)] == [[0x60], [0xa5, 0xca]]
+robotron_versions = segments_at(robotron, 0x4c6e)
+assert [data for _, data in robotron_versions] == [[0x60], [0xa5, 0xca]]
+valid = subprocess.run(
+    [str(apple2tc), "../decoded/robotron/robotron2084.b33", "--simple-c",
+     "--run-data=../decoded/robotron/robotron.json"],
+    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+assert valid.returncode == 0, valid.stderr
+
+valid = subprocess.run(
+    [str(apple2tc), str(tmp / "switch.b33"), "--simple-c",
+     f"--run-data={tmp / 'switch.json'}"],
+    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+assert valid.returncode == 0, valid.stderr
+
+regs = switch["generations"][0]["regs"]
+bad_cases = {
+    "missing-code": ([{"regs": regs}], "Invalid generation"),
+    "missing-address": ([{"regs": regs, "code": [{"bytes": [0xea]}]}],
+                        "Invalid generation code segment"),
+    "missing-bytes": ([{"regs": regs, "code": [{"addr": 0x900}]}],
+                      "Invalid generation code segment"),
+    "address-out-of-range": (
+        [{"regs": regs, "code": [{"addr": 0x10000, "bytes": [0xea]}]}],
+        "Invalid generation segment address"),
+    "segment-crosses-address-space": (
+        [{"regs": regs, "code": [{"addr": 0xffff, "bytes": [0xea, 0x60]}]}],
+        "Generation segment exceeds address space"),
+    "overlapping-segments": (
+        [{"regs": regs, "code": [{"addr": 0x900, "bytes": [0xea, 0xea]},
+                                 {"addr": 0x901, "bytes": [0x60]}]}],
+        "Overlapping generation code segments"),
+    "duplicate-segment": (
+        [{"regs": regs, "code": [{"addr": 0x900, "bytes": [0xea]},
+                                 {"addr": 0x900, "bytes": [0xea]}]}],
+        "Overlapping generation code segments"),
+    "invalid-byte": (
+        [{"regs": regs, "code": [{"addr": 0x900, "bytes": [256]}]}],
+        "Invalid generation segment byte"),
+}
+with tempfile.TemporaryDirectory(dir=tmp) as invalid_dir:
+    invalid_dir = pathlib.Path(invalid_dir)
+    for name, (generations, message) in bad_cases.items():
+        recording = dict(switch)
+        recording["generations"] = generations
+        path = invalid_dir / f"{name}.json"
+        path.write_text(json.dumps(recording))
+        result = subprocess.run(
+            [str(apple2tc), str(tmp / "switch.b33"), "--simple-c",
+             f"--run-data={path}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        assert result.returncode != 0 and message in result.stderr, (name, result.stderr)
+
 print("Generation interpreter and recording checks passed")
 PY
 
