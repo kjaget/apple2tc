@@ -1,6 +1,6 @@
 # Code-generation switching: first implementation plan
 
-Status: test-driven plan; Task 1 fixtures are implemented, later tasks remain
+Status: test-driven plan; Tasks 1 and 2 are implemented, later tasks remain
 proposed. This is a companion to the [living design](2026-11-17-code-generation-switching.md),
 primarily addressing Question 1, bullet 1. Work through the tasks in order;
 each task should be independently reviewable and leave existing default
@@ -99,7 +99,7 @@ Use temporary test outputs with cleanup following repository practice.
    execute it before any write, then replace it with an instruction of a
    different length and execute again. Use distinct result bytes and a return
    target that makes an incorrect length visible. Verify both old and new
-   instruction bytes and starts; this catches reliance on `memWritten_` for
+   instruction bytes and starts; this catches reliance on `written` for
    the initial version.
 3. **Operands and overlapping streams:** one unchanged opcode has a modified
    operand, and a byte is also an opcode when entered from an overlapping
@@ -158,29 +158,32 @@ include both snapshot sequences and the current Simple C mismatch.
 **Files:** [`DebugState6502.h`](../../include/apple2tc/DebugState6502.h),
 [`DebugState6502.cpp`](../../lib/cpuemu/DebugState6502.cpp), focused tests.
 
-- [ ] Write a focused test for index 0, append and independent updates: setting
+- [x] Write a focused test for index 0, append and independent updates: setting
       a written/start/full bit in one entry must not mutate another; a newly
       appended entry must have the explicitly chosen inherited state.
-- [ ] Introduce the smallest representation that groups the three existing
+- [x] Introduce the smallest representation that groups the three existing
       bitsets by index, choosing collector or decompiler ownership based on
       Task 1's findings. Begin with full copies if practical; `3 * 65536` bits
       is approximately 24 KiB per entry before container overhead. Treat this
       as a measurement baseline, not a requirement to keep every transient
       collector set indefinitely.
-- [ ] If the collector is changed, route its existing operations through entry
+- [x] If the collector is changed, route its existing operations through entry
       0 first; retain current save/reset behavior and existing JSON. Otherwise
       keep its behavior intact while testing the new decompiler-side container.
       Do not label old partial snapshots as complete code states. Verify reset
       and repeated collection do not leak data between runs.
-- [ ] Exercise the append/copy operation in a focused test, but do not switch
+- [x] Exercise the append/copy operation in a focused test, but do not switch
       the production collector to new semantics until Task 3 defines what its
       entries mean.
 
-**Done:** current tests and serialized legacy behavior are unchanged;
-generation-indexed storage is tested independently. Measure memory and
-construction/lookup time with a realistic recording before choosing a sparse
-alternative. If measurements favor sparse overrides, test explicit clears,
-inheritance and bounded lookup before replacing copies.
+**Done:** focused tests pass and the directed recordings' serialized legacy
+behavior is unchanged; generation-indexed storage is tested independently. A synthetic workload
+based on Bolo's actual segment ranges measured copying, lookup and peak RSS;
+see the [design notes](2026-11-17-code-generation-switching.md#planning-notes)
+for the method and its limitations. Measure an actual generation-aware
+workload before choosing a sparse alternative. If measurements favor sparse
+overrides, test explicit clears, inheritance and bounded lookup before
+replacing copies.
 
 ### 3. Reuse recorded bytes and fill demonstrated gaps
 

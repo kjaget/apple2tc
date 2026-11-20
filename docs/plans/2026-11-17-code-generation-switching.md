@@ -72,18 +72,21 @@ describes recording written-then-executed code and closing a generation before
 an executed address is overwritten. This is useful prior art, not a complete
 runtime generation-switching design.
 
-The current [collector](../../lib/cpuemu/DebugState6502.cpp) uses:
+The current [collector](../../lib/cpuemu/DebugState6502.cpp) uses entry 0 of
+`GenerationMemoryTracking`:
 
-- `memWritten_` for addresses observed written; saved executable ranges are
-  cleared from it, while other written addresses can remain marked.
-- `memExecStart_` for instruction starts executed after their opcode address
-  was written; `memExecFull_` marks the corresponding instruction bytes.
+- `written` (formerly `memWritten_`) for addresses observed written; saved
+  executable ranges are cleared from it, while other written addresses can
+  remain marked.
+- `execStart` (formerly `memExecStart_`) for instruction starts executed after
+  their opcode address was written; `execFull` (formerly `memExecFull_`)
+  marks the corresponding instruction bytes.
 - A later write to a marked instruction start triggers `saveGeneration()`
   before the write. It saves the marked bytes from the then-visible memory
   view; collection also saves a final generation at the end.
 - `firstInstructions_` separately records the first observed instruction bytes
   at each collected PC and whether its operand was observed to change. The
-  bitsets do not store those values; `memExecStart_` and `memExecFull_` are
+  bitsets do not store those values; `execStart` and `execFull` are
   reset during generation saves.
 
 These are collection-time observations, not a runtime switch mechanism.
@@ -461,6 +464,26 @@ also a learning, even before code is written.
 
 ## Planning notes
 
+- **2026-11-20, Task 2:** The collector now holds three bitsets per indexed
+  entry. Appending copies the latest entry, including explicitly cleared
+  bits, and later edits are independent. Production still uses only entry 0;
+  saved JSON generations are not equated with these entries. Starting a new
+  collection resets the container to one empty entry. `BitSet` previously
+  owned a raw array with unsafe implicit copying; its storage now has deep
+  copy semantics. The directed recordings' JSON was identical before and
+  after this refactor.
+- **2026-11-20, Task 2 measurement:** In a one-off optimized C++ experiment
+  using the 596 generation segment ranges from
+  [Bolo's recording](../../decoded/bolo/bolo.json), an artificial model copied
+  the preceding three bitsets for every entry, marked each segment range as
+  written and executable, and marked each segment start as an instruction
+  start. Construction including reading those ranges took 5.2 ms; 39,059,456
+  `execFull` lookups took 14.3 ms; peak process RSS was 17,132 KiB on this
+  machine. The bit storage alone is about 13.97 MiB. Segment starts are only
+  proxies, not observed instruction starts, and this is not a measurement
+  of real collector or decompiler runtime. The current collector appends no
+  copies. Retain the simple representation for now; measure real
+  generation-aware workloads before choosing sparse storage.
 - **2026-11-20:** Selected a test-driven, low-memory first iteration with
   generation-indexed tracking and deliberately duplicated whole-generation
   switches. Looking at the current collector showed that retaining its

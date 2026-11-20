@@ -21,9 +21,7 @@ void DebugState6502::setModeCollect(Emu6502 *emu, unsigned int limit) {
   collected_ = Collected{};
   collected_.startRegs = emu->getRegs();
   virtualSP_ = emu->getRegs().sp;
-  memWritten_.clear();
-  memExecStart_.clear();
-  memExecFull_.clear();
+  memoryTracking_.reset();
   firstInstructions_.clear();
   languageCardStart_.reset();
   generations_.clear();
@@ -276,6 +274,7 @@ static inline int getStackChange(CPUInstKind kind) {
 }
 
 Emu6502::StopReason DebugState6502::collectData(Emu6502 *emu, uint16_t pc) {
+  auto &memory = memoryTracking_[0];
   ThreeBytes b = ram_peek3(emu, pc);
   auto [first, inserted] = firstInstructions_.try_emplace(pc, ObservedInstruction{b});
   if (!inserted && !first->second.operandChanged) {
@@ -335,11 +334,11 @@ Emu6502::StopReason DebugState6502::collectData(Emu6502 *emu, uint16_t pc) {
     }
   }
 
-  if (memWritten_.get(pc)) {
+  if (memory.written.get(pc)) {
     // We are executing an instruction that we previously modified. Mark it as a
     // generated instruction.
-    memExecStart_.set(pc, true);
-    memExecFull_.setMulti(pc, pc + inst.size, true);
+    memory.execStart.set(pc, true);
+    memory.execFull.setMulti(pc, pc + inst.size, true);
   }
 
   if (instIsBranch(inst.kind, inst.addrMode) || inst.kind == CPUInstKind::RTS) {
@@ -349,33 +348,34 @@ Emu6502::StopReason DebugState6502::collectData(Emu6502 *emu, uint16_t pc) {
       return Emu6502::StopReason::StopRequesed;
     ++icount_;
   } else if (instWritesMemNormal(inst.kind, inst.addrMode)) {
-    if (memExecStart_.get(ea)) {
+    if (memory.execStart.get(ea)) {
       // We are modifying something that we executed. Save all previously generated instructions.
       saveGeneration(emu, regs);
     }
-    memWritten_.set(ea, true);
+    memory.written.set(ea, true);
   }
   return Emu6502::StopReason::None;
 }
 
 void DebugState6502::saveGeneration(const Emu6502 *emu, Emu6502::Regs regs) {
+  auto &memory = memoryTracking_[0];
   fprintf(stderr, "Recording generation %zu\n", generations_.size());
   generations_.emplace_back(regs);
   auto &gen = generations_.back();
 
   unsigned from = 0;
   const auto &ram = emu->getMainRAM();
-  while ((from = memExecFull_.findSetBit(from)) != memExecFull_.size()) {
-    unsigned to = memExecFull_.findClearBit(from + 1);
+  while ((from = memory.execFull.findSetBit(from)) != memory.execFull.size()) {
+    unsigned to = memory.execFull.findClearBit(from + 1);
     fprintf(stderr, "  Segment [$%04X..$%04X]\n", from, to - 1);
     branchTargets_.insert(from);
     gen.addRange(from, to - from, ram + from);
-    memWritten_.setMulti(from, to, false);
-    if (to == memExecFull_.size())
+    memory.written.setMulti(from, to, false);
+    if (to == memory.execFull.size())
       break;
     from = to + 1;
   }
 
-  memExecStart_.clear();
-  memExecFull_.clear();
+  memory.execStart.clear();
+  memory.execFull.clear();
 }

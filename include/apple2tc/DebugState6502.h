@@ -12,6 +12,8 @@
 #include "apple2tc/d6502.h"
 #include "apple2tc/emu6502.h"
 
+#include <cstddef>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <ostream>
@@ -20,6 +22,44 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+
+struct GenerationMemoryBits {
+  /// Addresses written since they were last included in a saved segment.
+  BitSet written{0x10000};
+  /// Instruction starts written and then executed since the last save.
+  BitSet execStart{0x10000};
+  /// Bytes of those executed instructions.
+  BitSet execFull{0x10000};
+};
+
+class GenerationMemoryTracking {
+public:
+  std::size_t size() const {
+    return entries_.size();
+  }
+
+  GenerationMemoryBits &operator[](std::size_t index) {
+    return entries_[index];
+  }
+
+  const GenerationMemoryBits &operator[](std::size_t index) const {
+    return entries_[index];
+  }
+
+  void appendCopy() {
+    entries_.push_back(entries_.back());
+  }
+
+  void reset() {
+    entries_.resize(1);
+    entries_[0].written.clear();
+    entries_[0].execStart.clear();
+    entries_[0].execFull.clear();
+  }
+
+private:
+  std::vector<GenerationMemoryBits> entries_{1};
+};
 
 /// A helper class for dumping debug state to stdout.
 class DebugState6502 {
@@ -222,13 +262,8 @@ private:
   };
   std::optional<LanguageCardStart> languageCardStart_{};
 
-  /// Keep track of addresses that are written to in the current generation.
-  BitSet memWritten_{0x10000};
-  /// Starts of instructions written to and executed but not written again.
-  BitSet memExecStart_{0x10000};
-  /// The entire length of instructions written to and executed but not written
-  /// again.
-  BitSet memExecFull_{0x10000};
+  /// Entry 0 retains the current collector's tracking and save semantics.
+  GenerationMemoryTracking memoryTracking_{};
 
   /// A descriptor of a range of memory.
   struct MemDesc {

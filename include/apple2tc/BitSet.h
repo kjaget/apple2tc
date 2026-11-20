@@ -7,21 +7,15 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
-#include <cstring>
-#include <algorithm>
+#include <vector>
 
 class BitSet {
 public:
   explicit BitSet(unsigned size)
-      : data_(new uint32_t[(size + 31) >> 5]), bitSize_(size), wordSize_((size + 31) >> 5) {
-    clear();
-  }
-
-  ~BitSet() {
-    delete[] data_;
-  }
+      : data_((size + 31) >> 5, 0), bitSize_(size), wordSize_((size + 31) >> 5) {}
 
   [[nodiscard]] unsigned size() const {
     return bitSize_;
@@ -46,30 +40,30 @@ public:
   }
 
   void clear() {
-    memset(data_, 0, wordSize_ * 4);
+    std::fill(data_.begin(), data_.end(), 0);
   }
 
   /// return the index of the next set bit starting from \p startingFrom, or
   /// `size()` if none was found.
   [[nodiscard]] unsigned findSetBit(unsigned startingFrom) const {
-    const uint32_t *p = data_ + (startingFrom >> 5);
+    const uint32_t *p = data_.data() + (startingFrom >> 5);
     if (unsigned bitIndex = startingFrom & 31) {
       uint32_t w = *p >> bitIndex;
       for (; w; ++bitIndex, w >>= 1) {
         if (w & 1) {
-          bitIndex += (p - data_) * 32;
+          bitIndex += (p - data_.data()) * 32;
           return bitIndex < bitSize_ ? bitIndex : bitSize_;
         }
       }
       ++p;
     }
 
-    const uint32_t *end = data_ + wordSize_;
+    const uint32_t *end = data_.data() + wordSize_;
     for (; p != end; ++p) {
       uint32_t w = *p;
       for (unsigned bitIndex = 0; w; ++bitIndex, w >>= 1) {
         if (w & 1) {
-          bitIndex += (p - data_) * 32;
+          bitIndex += (p - data_.data()) * 32;
           return bitIndex < bitSize_ ? bitIndex : bitSize_;
         }
       }
@@ -81,24 +75,24 @@ public:
   /// return the index of the next set bit starting from \p startingFrom, or
   /// `size()` if none was found.
   [[nodiscard]] unsigned findClearBit(unsigned startingFrom) const {
-    const uint32_t *p = data_ + (startingFrom >> 5);
+    const uint32_t *p = data_.data() + (startingFrom >> 5);
     if (unsigned bitIndex = startingFrom & 31) {
       uint32_t w = ~*p >> bitIndex;
       for (; w; ++bitIndex, w >>= 1) {
         if (w & 1) {
-          bitIndex += (p - data_) * 32;
+          bitIndex += (p - data_.data()) * 32;
           return bitIndex < bitSize_ ? bitIndex : bitSize_;
         }
       }
       ++p;
     }
 
-    const uint32_t *end = data_ + wordSize_;
+    const uint32_t *end = data_.data() + wordSize_;
     for (; p != end; ++p) {
       uint32_t w = ~*p;
       for (unsigned bitIndex = 0; w; ++bitIndex, w >>= 1) {
         if (w & 1) {
-          bitIndex += (p - data_) * 32;
+          bitIndex += (p - data_.data()) * 32;
           return bitIndex < bitSize_ ? bitIndex : bitSize_;
         }
       }
@@ -114,7 +108,9 @@ public:
   }
 
 private:
-  uint32_t *data_;
+  // TODO: Benchmark fixed-size storage against this vector-backed design using
+  // real generation counts and copy/append workloads before changing it.
+  std::vector<uint32_t> data_;
   /// Size in bits.
   unsigned bitSize_;
   /// Size in 32-bit words.

@@ -154,6 +154,7 @@ done
 rm selfmod-overlap-test.c selfmod-overlap-test.ir selfmod-overlap.b33
 
 # Reproduce recorded opcode generations and initial preloaded code.
+"$bin/tests/cpuemu/generation-tracking-test"
 bash generation-switch-test.sh "$bin"
 
 # Common IR behavior without language-card mode: recorded operand changes,
