@@ -9,19 +9,32 @@ fi
 build=$(cd "$1" && pwd)
 cd "$(dirname "$0")"
 tmp=$(mktemp -d)
-trap 'rm -f "$tmp/switch.b33" "$tmp/preloaded.b33" "$tmp/states.b33" "$tmp/switch.ram" \
+trap 'rm -f "$tmp/switch.b33" "$tmp/preloaded.b33" "$tmp/delayed.b33" \
+  "$tmp/no-transition.b33" "$tmp/same-block.b33" "$tmp/states.b33" "$tmp/switch.ram" \
+  "$tmp/stack-written-code.b33" "$tmp/stack-written-code.ram" \
+  "$tmp/stack-written-code.ram.regs" "$tmp/stack-written-code.json" \
   "$tmp/switch.ram.regs" "$tmp/preloaded.ram" "$tmp/preloaded.ram.regs" \
-  "$tmp/switch.json" "$tmp/preloaded.json" "$tmp/states.json" \
+  "$tmp/delayed.ram" "$tmp/delayed.ram.regs" "$tmp/no-transition.ram" \
+  "$tmp/no-transition.ram.regs" "$tmp/same-block.ram" "$tmp/same-block.ram.regs" \
+  "$tmp/switch.json" "$tmp/preloaded.json" "$tmp/delayed.json" \
+  "$tmp/no-transition.json" "$tmp/same-block.json" "$tmp/states.json" \
   "$tmp/switch-state0.asm" "$tmp/state0.asm" "$tmp/state1.asm" "$tmp/state2.asm" \
+  "$tmp/same-block-state0.asm" "$tmp/same-block-state1.asm" \
+  "$tmp/stack-written-code.log" \
   "$tmp/state-error.json" \
-  "$tmp/switch.log" "$tmp/preloaded.log" \
+  "$tmp/switch.log" "$tmp/preloaded.log" "$tmp/delayed.log" \
+  "$tmp/no-transition.log" "$tmp/same-block.log" \
   "$tmp/generation-switch-generated.c" "$tmp/generate.log" "$tmp/driver.o" \
   "$tmp/generated-run" "$tmp/generated.out"; rmdir "$tmp"' EXIT
 
 "$build/tools/a6502/a6502" generation-switch.s "$tmp/switch.b33"
 "$build/tools/a6502/a6502" generation-preloaded.s "$tmp/preloaded.b33"
+"$build/tools/a6502/a6502" generation-switch-delayed.s "$tmp/delayed.b33"
+"$build/tools/a6502/a6502" generation-switch-no-transition.s "$tmp/no-transition.b33"
+"$build/tools/a6502/a6502" generation-same-block.s "$tmp/same-block.b33"
+"$build/tools/a6502/a6502" generation-stack-written-code.s "$tmp/stack-written-code.b33"
 "$build/tools/a6502/a6502" generation-state.s "$tmp/states.b33"
-for name in switch preloaded; do
+for name in switch preloaded delayed no-transition same-block; do
   if ! "$build/tools/a2run/a2run" "$tmp/$name.b33" --collect --limit=20 --frames=150 \
       --snapshot-at=0380 --snapshot-out="$tmp/$name.ram" --out="$tmp/$name.json" \
       >"$tmp/$name.log" 2>&1; then
@@ -29,6 +42,12 @@ for name in switch preloaded; do
     exit 1
   fi
 done
+if ! "$build/tools/a2run/a2run" "$tmp/stack-written-code.b33" --collect --limit=20 \
+    --frames=150 --snapshot-at=0380 --snapshot-out="$tmp/stack-written-code.ram" \
+    --out="$tmp/stack-written-code.json" >"$tmp/stack-written-code.log" 2>&1; then
+  cat "$tmp/stack-written-code.log" >&2
+  exit 1
+fi
 
 python3 - "$tmp" "$build/tools/apple2tc/apple2tc" <<'PY'
 import json
@@ -41,15 +60,17 @@ import tempfile
 tmp = pathlib.Path(sys.argv[1])
 apple2tc = pathlib.Path(sys.argv[2])
 
-def read_case(name, expected_ram, expected_a):
+def read_case(name, expected_ram, expected_a, expected_x=0x22, expected_y=0,
+              expected_sp=0xff):
     ram = (tmp / f"{name}.ram").read_bytes()
     assert len(ram) == 0x10000
     assert ram[0x200:0x200 + len(expected_ram)] == bytes(expected_ram), name
     fields = dict(line.split(maxsplit=1) for line in
                   (tmp / f"{name}.ram.regs").read_text().splitlines())
-    for key, value in {"pc": 0x380, "a": expected_a, "x": 0x22, "y": 0,
-                       "sp": 0xff, "status": 0x20}.items():
-        assert int(fields[key], 16) == value, (name, key, fields[key])
+    for key, value in {"pc": 0x380, "a": expected_a, "x": expected_x, "y": expected_y,
+                       "sp": expected_sp, "status": 0x20}.items():
+        if value is not None:
+            assert int(fields[key], 16) == value, (name, key, fields[key])
     return json.loads((tmp / f"{name}.json").read_text())
 
 def segments_at(recording, addr):
@@ -58,7 +79,49 @@ def segments_at(recording, addr):
             for segment in generation["code"]
             if segment["addr"] <= addr < segment["addr"] + len(segment["bytes"])]
 
+def has_instruction(listing, addr, mnemonic, operand=None):
+    for line in listing.splitlines():
+        if not line.startswith(f"/*{addr:04X}*/"):
+            continue
+        if not re.search(rf"\s{mnemonic}\b", line):
+            continue
+        if operand is None or operand in line:
+            return True
+    return False
+
+def expect_instruction(listing, addr, mnemonic, operand=None):
+    if not has_instruction(listing, addr, mnemonic, operand):
+        matching = [line for line in listing.splitlines()
+                    if line.startswith(f"/*{addr:04X}*/")]
+        raise AssertionError(
+            f"missing ${addr:04X} {mnemonic} {operand or ''}; lines={matching}")
+
 switch = read_case("switch", [0x11, 0x22, 0x11], 0x11)
+switch_saved_pcs = [generation["regs"]["pc"] for generation in switch["generations"]]
+assert switch_saved_pcs == [0x0300, 0x031e, 0x0330, 0x0380], switch_saved_pcs
+assert switch["Branches"]["790"] == [0x900]
+assert switch["Branches"]["808"] == [0x900]
+assert switch["Branches"]["826"] == [0x900]
+delayed = read_case("delayed", [0x11, 0x22, 0x11], 0x11, expected_y=1)
+no_transition = read_case("no-transition", [0x11, 0x11], 0x11, 0xff)
+same_block = read_case(
+    "same-block", [0xa2], 0xa2, 0x11, expected_y=None, expected_sp=None)
+stack_written_code = json.loads((tmp / "stack-written-code.json").read_text())
+stack_ram = (tmp / "stack-written-code.ram").read_bytes()
+assert stack_ram[0x13c:0x141] == bytes([0xa9, 0x11, 0x4c, 0x80, 0x03])
+stack_regs = dict(line.split(maxsplit=1) for line in
+                  (tmp / "stack-written-code.ram.regs").read_text().splitlines())
+assert int(stack_regs["pc"], 16) == 0x380 and int(stack_regs["a"], 16) == 0x11
+assert stack_written_code["Branches"]["789"] == [0x13c]
+stack_first = {
+    entry[0]: entry[1:] for entry in stack_written_code["FirstInstructions"]
+}
+assert stack_first[0x13c][:3] == [0xa9, 0x11, 0x4c]
+assert not any(
+    segment["addr"] <= 0x13c < segment["addr"] + len(segment["bytes"])
+    for generation in stack_written_code["generations"]
+    for segment in generation["code"]
+), "implicit stack writes are not included in recorded generation segments"
 versions = segments_at(switch, 0x900)
 assert [entry[1][:2] for entry in versions] == [[0xa9, 0x11], [0xa2, 0x22], [0xa9, 0x11]]
 assert versions[0][1][:3] == [0xa9, 0x11, 0x60]
@@ -80,6 +143,48 @@ assert switch_states == [
     bytes([0xa2, 0x22, 0x60]),
     bytes([0xa9, 0x11, 0x60]),
 ], "partial segments must retain unchanged instruction bytes"
+
+delayed_versions = segments_at(delayed, 0x900)
+assert [entry[1][:2] for entry in delayed_versions] == [
+    [0xa9, 0x11], [0xa2, 0x22], [0xa9, 0x11]
+]
+delayed_saved_pcs = [generation["regs"]["pc"] for generation in delayed["generations"]]
+assert delayed_saved_pcs[1] == 0x0323, delayed_saved_pcs
+assert delayed_saved_pcs[2] == 0x033e, delayed_saved_pcs
+delayed_branches = delayed["Branches"]
+assert delayed_branches["790"] == [0x900]  # Initial JSR at $0316.
+assert delayed_branches["822"] == [0x900]  # Replacement call at $0336.
+assert delayed_branches["840"] == [0x900]  # Restoration call at $0348.
+
+no_transition_versions = segments_at(no_transition, 0x900)
+assert [entry[1][:3] for entry in no_transition_versions] == [[0xa9, 0x11, 0x60]]
+assert no_transition["Branches"]["790"] == [0x900]
+assert no_transition["Branches"]["796"] == [0x900]
+no_transition_first = {
+    entry[0]: entry[1:] for entry in no_transition["FirstInstructions"]
+}
+assert no_transition_first[0x900][:3] == [0xa9, 0x11, 0x60]
+
+same_block_versions = segments_at(same_block, 0x305)
+assert [entry[1][:2] for entry in same_block_versions] == [[0xa2, 0x11]]
+same_block_state_paths = []
+for index in range(2):
+    output = tmp / f"same-block-state{index}.asm"
+    with output.open("w") as stream:
+        result = subprocess.run(
+            [str(apple2tc), str(tmp / "same-block.b33"), "--asm",
+             f"--run-data={tmp / 'same-block.json'}", f"--generation-state={index}"],
+            stdout=stream, stderr=subprocess.PIPE, text=True)
+    assert result.returncode == 0, result.stderr
+    same_block_state_paths.append(output.read_text())
+expect_instruction(same_block_state_paths[0], 0x302, "STA")
+expect_instruction(same_block_state_paths[0], 0x305, "LDA", "#$11")
+expect_instruction(same_block_state_paths[1], 0x305, "LDX", "#$11")
+block_lines = [
+    line for line in same_block_state_paths[0].splitlines()
+    if line == "; Code range [$0300-$030C]"
+]
+assert len(block_lines) == 1, block_lines
 
 preloaded = read_case("preloaded", [0x11, 0x22], 0x60)
 first = {entry[0]: entry[1:] for entry in preloaded["FirstInstructions"]}
@@ -190,23 +295,6 @@ state0_result, state0 = disassemble_state(0)
 state1_result, state1 = disassemble_state(1)
 assert state0_result.returncode == 0, state0_result.stderr
 assert state1_result.returncode == 0, state1_result.stderr
-
-def has_instruction(listing, addr, mnemonic, operand=None):
-    for line in listing.splitlines():
-        if not line.startswith(f"/*{addr:04X}*/"):
-            continue
-        if not re.search(rf"\s{mnemonic}\b", line):
-            continue
-        if operand is None or operand in line:
-            return True
-    return False
-
-def expect_instruction(listing, addr, mnemonic, operand=None):
-    if not has_instruction(listing, addr, mnemonic, operand):
-        matching = [line for line in listing.splitlines()
-                    if line.startswith(f"/*{addr:04X}*/")]
-        raise AssertionError(
-            f"missing ${addr:04X} {mnemonic} {operand or ''}; lines={matching}")
 
 switch_state0_path = tmp / "switch-state0.asm"
 with switch_state0_path.open("w") as stream:

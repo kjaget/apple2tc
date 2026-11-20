@@ -270,37 +270,48 @@ state completeness remain for later tasks.
 
 **Files:** focused fixtures, collector/loader if needed, living design.
 
-- [ ] For case 1, list the actual stores, affected opcode addresses, and
-      subsequent execution entries; repeat with a delay and a no-transition
-      path. Investigate whether static analysis can identify the small
-      transition sequence, including indexed/indirect writes, without assuming
-      the store always writes the recorded value.
-- [ ] Define a testable selection contract for the supported subset: candidate
-      boundary, code bytes or other state needed to distinguish versions,
-      invalidation on relevant writes, and what happens for zero or multiple
-      matches. A single PC or last-recorded index is not sufficient evidence.
-      Checks must use non-side-effecting memory access and must not match only
-      one byte when that would permit an unsafe mixed state.
-- [ ] Check all ways the supported generated program can write code, including
-      helper, stack and external/host paths where applicable. Either route
-      them through tracking or explicitly reject/exclude them with a test.
-      If static analysis cannot supply enough evidence, add the smallest
-      collection-time transition observations to run-data and validate them;
-      collection evidence still does not replace runtime state checks.
-- [ ] Write tests for known selection, unchanged execution, restoration,
-      partial/unknown writes and an ambiguous candidate. Add a same-block
-      test showing that a boundary after the affected instruction is too late.
-      Record the chosen subset and any unresolved detection costs in the design.
+- [x] For the directed case, identify the writes to `$0900-$0902`, their
+      source PCs, and the next calls into `$0900`. Repeat with a delay and
+      indexed/indirect stores, and with an unchanged-code path. The collector
+      saves the PC that triggered a snapshot but not a per-write event/value;
+      the fixtures and instruction bytes supply the missing evidence.
+- [x] Define the low-memory selection contract: revalidate before every
+      versioned instruction, including entries inside a block; dirty state on
+      writes to bytes used as static code; compare the complete signature
+      needed to distinguish candidate code, not a PC, generation ordinal, or
+      one byte. Zero matches (including partial/unknown code) fail closed;
+      duplicate signatures with different generated bodies are ambiguous and
+      fail closed. Use direct low-memory reads, not side-effecting `peek()`.
+- [x] Inventory generated Simple C writes. CPU stores, read-modify-write,
+      indexed/indirect writes, and stack pushes converge on `ram_poke_impl`;
+      initialization `memcpy` occurs before execution. The interpreter
+      collector does not mark implicit stack writes, so stack-produced code
+      is excluded until collected and tested. Upper-memory/I/O mapping and
+      host mutations outside the public write helpers are also excluded.
+- [x] Add delayed, unchanged, restored, and same-block evidence fixtures. The
+      same-block test proves `$0305` changes after a store at `$0302` while
+      remaining in the `$0300-$030C` block.
+- [ ] Implement and test the runtime signature matcher and invalidation
+      behavior for known/unchanged/restored, partial/unknown, and ambiguous
+      states. This requires the runtime selector introduced in Task 6; it is
+      a hard gate before code-generation dispatch, not evidence that dispatch
+      already exists.
 
-**Done:** the proposed selector is justified by tests and fails closed on
-unsupported or ambiguous states. If no safe boundary can be proven, stop and
-revise the plan before emitting working dispatch.
+**Evidence gate:** the fixtures establish a candidate contract and show why
+block-entry-only dispatch is too late. Task 6 must begin with the fail-closed
+matcher tests above; do not emit generation dispatch until they pass.
 
 ### 6. Emit complete switches and safe dispatch
 
 **Files:** [`PrintSimpleC.cpp`](../../tools/apple2tc/PrintSimpleC.cpp),
 runtime helpers only if needed, generated-C tests.
 
+- [ ] Implement and test the runtime signature matcher before emission. Cover
+      known, unchanged, delayed, and restored states; partial/unknown bytes
+      must match zero candidates, and mixed independent regions or duplicate
+      signatures with different bodies must fail as ambiguous. Match the full
+      set of state-defining bytes with non-side-effecting reads. Invalidate
+      through the shared low-memory write path, including stack writes.
 - [ ] Add an opt-in generation-aware emission path. Emit one helper per
       materialized state with its own complete static PC switch and explicit
       unknown-PC error. Keep initialization and externally visible runtime

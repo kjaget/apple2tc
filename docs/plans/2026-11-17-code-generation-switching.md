@@ -561,6 +561,64 @@ also a learning, even before code is written.
   Materialization is a cumulative patch view, not a complete snapshot: absence
   from a segment still cannot establish that a byte was unchanged, and runtime
   transition selection remains unresolved.
+- **2026-11-20, Task 5 transition evidence:** In
+  [`generation-switch.s`](../../tests/generation-switch.s), the initial stores
+  are `$0309 STA $0900 = $A9`, `$030E STA $0901 = $11`, and
+  `$0313 STA $0902 = $60`; `$0316 JSR $0900` then enters `$0900`, executes the
+  installed `LDA #$11`, and returns through `$0902`. Replacement stores are
+  `$031E STA $0900 = $A2` and `$0323 STA $0901 = $22`; the next
+  `$0328 JSR $0900` enters the replacement `LDX #$22`. Restoration stores
+  `$0330 STA $0900 = $A9` and `$0335 STA $0901 = $11`; `$033A JSR $0900`
+  enters the restored version. The collector saves before the two opcode
+  stores, with saved PCs `$031E` and `$0330`, and records later call targets,
+  but does not serialize individual write events or their values.
+- **2026-11-20, Task 5 timing/addressing fixtures:** The delayed variant waits
+  in `$0500` before replacing code, writes the opcode with `STA $08FF,X` at
+  `$0323` (`X=$01`, so the destination is `$0900`), and writes the operand
+  with `STA ($10),Y` at `$0332` (`$0010/$0011=$0900`, `Y=$01`, destination
+  `$0901`). Calls at `$0316`, `$0336`, and `$0348` enter `$0900`; saved PCs
+  `$0323` and `$033E` occur before the replacement and restoration opcode
+  writes. This demonstrates that actual address calculation and current bytes,
+  not elapsed time or the recorded generation index, identify the code used.
+  The no-transition fixture executes the unchanged `$A9 $11 $60` routine
+  twice, with no writes to it between executions.
+- **2026-11-20, Task 5 same-block and write-path findings:** In
+  [`generation-same-block.s`](../../tests/generation-same-block.s), the
+  `$0302 STA $0305` changes the next instruction from `LDA #$11` to
+  `LDX #$11`; both instructions remain in the `$0300-$030C` basic block.
+  Therefore a check only at the next block entry would execute the wrong
+  instruction. A correct boundary must be before `$0305`, splitting the
+  generated block there. The collector's effective-address helper resolves
+  direct, indexed, and indirect writes using runtime registers/pointers, so a
+  static guess about the stored value is unnecessary for these observations.
+  It does not record every write event.
+- **2026-11-20, Task 5 stack-write gap:** The stack fixture uses `PHA` to write
+  `$A9 $11 $4C $80 $03` at `$013C`, then executes that routine. The bytes appear
+  in `FirstInstructions` but not in `generations[].code`: the collector handles
+  explicit stores and read-modify-write instructions through
+  `instWritesMemNormal`, which intentionally excludes implicit stack writes.
+  Generated Simple C routes CPU stack writes through `ram_poke_impl`, but that
+  runtime write visibility cannot repair missing recorded candidate code.
+  Until collection covers stack-written code, such code is outside the first
+  supported subset and must fail closed if encountered. Generated
+  initialization uses `memcpy` before execution; ordinary generated CPU
+  stores, read-modify-write, indexed/indirect stores, and `push8` converge on
+  `ram_poke_impl`. `get_ram()` is const; host/I/O writes outside the shared
+  low-memory helper and upper-memory mapping changes remain unsupported.
+- **2026-11-20, Task 5 provisional selection contract:** For low-memory Simple
+  C, mark a candidate code signature dirty on any write to a byte used as a
+  compile-time instruction or operand. Revalidate before executing each
+  versioned instruction, not merely at a later basic-block entry; a changed
+  instruction inside a block requires a boundary at its PC. Match the complete
+  bytes needed to distinguish the generated bodies, including all relevant
+  instruction bytes, using direct low-memory storage reads rather than
+  side-effecting `peek()`. A store's value and timing are not transition
+  evidence. Zero matches, including partial/unknown code, must error; multiple
+  matches with different bodies must error; equivalent candidates can be
+  coalesced. The current fixtures establish the evidence and boundary but do
+  not implement or test a runtime selector. That fail-closed matcher and its
+  known/unchanged/restored/partial/unknown/ambiguous tests are a gate at the
+  start of implementation Task 6.
 - **2026-11-20:** `CYCLES` currently charges a whole block and dispatches
   debug/probe events at its entry. Splitting blocks or exiting mid-block for
   a transition needs explicit cycle and event tests, not just equivalent final
