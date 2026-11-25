@@ -336,10 +336,14 @@ runtime helpers only if needed, generated-C tests.
       written. A safe resume case re-credits the new state's remaining
       instruction cycles without repeating the original block-entry probe or
       debug event.
-- [ ] Compare cycles and debug/probe events at transition boundaries, and
-      test repeated `run_emulated()` calls/yields. The current generated-C
-      driver checks result RAM, not all architectural state or event timing;
-      cycle/event equivalence is not yet claimed.
+- [x] Compare cycles and debug/probe events at transition boundaries, and
+      test repeated `run_emulated()` calls/yields. The switch and same-block
+      fixtures compare block-head debug/probe sequences and architectural
+      registers at `$0380` against the interpreter, using both one-cycle
+      repeated calls and a 1000-cycle call. Generated snapshot cycles are
+      normalized for the target block's upfront `CYCLES` charge and the
+      interpreter's ROM-entry offset. This covers the tested boundaries; it
+      does not claim cycle equivalence for untested programs or IO timing.
 - [x] Generated-C replay tests cover the installed/replaced/restored fixture,
       the preloaded length-changing fixture, delayed replacement, and an
       intra-block opcode replacement. An injected unknown opcode produces an
@@ -349,13 +353,17 @@ runtime helpers only if needed, generated-C tests.
       a recorded modified immediate uses a runtime read. A driver changes that
       operand after initialization and confirms the generated instruction
       observes it.
-- [ ] Broaden ordinary no-option regression coverage beyond the current build
-      and generation-switch tests.
+- [x] Broaden ordinary no-option regression coverage beyond the current build
+      and generation-switch tests. An unchanged-code fixture now compiles,
+      runs through ordinary `--simple-c` without `--generation-aware`, and
+      matches the interpreter's result bytes.
 
 **Initial result:** the opt-in path correctly replays the directed low-memory
-fixtures and rejects an injected unknown opcode. It is not yet a general
-generation-aware runtime: the remaining gates above must pass before widening
-the documented support claim.
+fixtures, rejects unknown and ambiguous code, preserves tested transition
+events and cycle totals across repeated calls, and safely resumes the tested
+intra-block replacement. It is not yet a general generation-aware runtime:
+the remaining gates above must pass before widening the documented support
+claim.
 
 ## Iteration after the first working product
 

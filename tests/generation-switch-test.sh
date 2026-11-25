@@ -27,6 +27,21 @@ trap 'rm -f "$tmp/switch.b33" "$tmp/preloaded.b33" "$tmp/delayed.b33" \
   "$tmp/no-transition.log" "$tmp/same-block.log" \
   "$tmp/generation-switch-generated.c" "$tmp/generate.log" "$tmp/driver.o" \
   "$tmp/generated-run" "$tmp/generated.out" "$tmp/generation-aware-generate.log" \
+  "$tmp/generation-switch.probe" "$tmp/interpreter.trace" "$tmp/interpreter.log" \
+  "$tmp/interpreter.probes" "$tmp/interpreter-snapshot.ram" \
+  "$tmp/interpreter-snapshot.ram.regs" "$tmp/yield-one.trace" \
+  "$tmp/yield-one.probes" "$tmp/yield-one.ram" "$tmp/yield-one.ram.regs" \
+  "$tmp/yield-bulk.trace" "$tmp/yield-bulk.probes" "$tmp/yield-bulk.ram" \
+  "$tmp/yield-bulk.ram.regs" "$tmp/yield-driver.o" "$tmp/yield-one-run" \
+  "$tmp/yield-bulk-run" "$tmp/no-option.out" \
+  "$tmp/same-block-timing.probe" "$tmp/same-block-interpreter.trace" \
+  "$tmp/same-block-interpreter.log" "$tmp/same-block-interpreter.probes" \
+  "$tmp/same-block-interpreter-snapshot.ram" \
+  "$tmp/same-block-interpreter-snapshot.ram.regs" \
+  "$tmp/same-block-yield-one.trace" "$tmp/same-block-yield-one.probes" \
+  "$tmp/same-block-yield-one.ram" "$tmp/same-block-yield-one.ram.regs" \
+  "$tmp/same-block-yield-bulk.trace" "$tmp/same-block-yield-bulk.probes" \
+  "$tmp/same-block-yield-bulk.ram" "$tmp/same-block-yield-bulk.ram.regs" \
   "$tmp/generated-aware.out" "$tmp/same-block-aware.out" \
   "$tmp/same-block-generation-aware.log" "$tmp/unknown-generation-aware.log" \
   "$tmp/unknown-driver.o" "$tmp/unknown-run" "$tmp/delayed-aware.out" \
@@ -414,6 +429,27 @@ fi
 grep -Fq '/* $030C LDA */ s_a = update_nz(0x11);' "$tmp/generation-switch-generated.c"
 grep -Fq '/* $0900 LDA */ s_a = update_nz(peek(0x0901));' \
   "$tmp/generation-switch-generated.c"
+python3 - "$tmp/generation-switch-generated.c" "$tmp/generation-switch.probe" <<'PY'
+import pathlib
+import re
+import sys
+
+generated = pathlib.Path(sys.argv[1]).read_text()
+sites = sorted(set(int(value, 16) for value in
+                   re.findall(r"CYCLES\(0x([0-9a-fA-F]+),", generated)))
+assert 0x0380 in sites, sites
+sites.remove(0x0380)
+site_list = ", ".join(f"${site:04X}" for site in sites)
+pathlib.Path(sys.argv[2]).write_text(
+    'probe visit(site = pc) { printf("%04X\\n", site) }\n'
+    'probe finish() { stop }\n'
+    f"install visit at {site_list}\n"
+    "install finish at $0380\n")
+PY
+"$build/tools/a2run/a2run" "$tmp/switch.b33" --from-rom --frames=150 \
+  --trace --probe="$tmp/generation-switch.probe" --probe-out="$tmp/interpreter.probes" \
+  --snapshot-at=0380 --snapshot-out="$tmp/interpreter-snapshot.ram" \
+  >"$tmp/interpreter.trace" 2>"$tmp/interpreter.log"
 cc -std=c11 -I../include -I"$tmp" -c generation-switch-driver.c -o "$tmp/driver.o"
 c++ "$tmp/driver.o" "$build/lib/a2host/liba2host.a" "$build/lib/a2io/liba2io.a" \
   -pthread -lm -o "$tmp/generated-run"
@@ -430,6 +466,196 @@ print(f"Interpreter: {expected}\nGeneration-aware: {actual}")
 if actual != expected:
     raise SystemExit("FAIL: generation-aware code does not execute all recorded opcode versions")
 PY
+cc -std=c11 -I../include -I"$tmp" -c generation-switch-yield-driver.c \
+  -o "$tmp/yield-driver.o"
+c++ "$tmp/yield-driver.o" "$build/lib/a2host/liba2host.a" \
+  "$build/lib/a2io/liba2io.a" -pthread -lm -o "$tmp/yield-one-run"
+"$tmp/yield-one-run" "$tmp/generation-switch.probe" "$tmp/yield-one.probes" \
+  "$tmp/yield-one.ram" 1 >"$tmp/yield-one.trace"
+c++ "$tmp/yield-driver.o" "$build/lib/a2host/liba2host.a" \
+  "$build/lib/a2io/liba2io.a" -pthread -lm -o "$tmp/yield-bulk-run"
+"$tmp/yield-bulk-run" "$tmp/generation-switch.probe" "$tmp/yield-bulk.probes" \
+  "$tmp/yield-bulk.ram" 1000 >"$tmp/yield-bulk.trace"
+python3 - "$tmp" <<'PY'
+import pathlib
+import re
+import sys
+
+tmp = pathlib.Path(sys.argv[1])
+
+def block_events(trace, block_pcs):
+    events = []
+    for line in trace.splitlines():
+        match = re.match(r"\s*(\d+)\s+([0-9A-F]{4}):", line)
+        if not match:
+            continue
+        cycles, pc = int(match.group(1)), int(match.group(2), 16)
+        if pc in block_pcs:
+            events.append((cycles, pc))
+        if pc == 0x0380:
+            break
+    assert events and events[-1][1] == 0x0380, events
+    return events
+
+def probe_prefix(path):
+    lines = path.read_text().splitlines()
+    if "0380" in lines:
+        lines = lines[:lines.index("0380") + 1]
+    return lines
+
+generated = (tmp / "generation-switch-generated.c").read_text()
+cycle_costs = {}
+for pc_text, cycles_text in re.findall(
+        r"CYCLES\(0x([0-9a-fA-F]+),\s*(\d+)\)", generated):
+    pc, cycles = int(pc_text, 16), int(cycles_text)
+    if pc in cycle_costs and cycle_costs[pc] != cycles:
+        raise SystemExit(f"FAIL: block ${pc:04X} has state-dependent cycle costs")
+    cycle_costs[pc] = cycles
+block_pcs = set(cycle_costs)
+interpreter_events = block_events((tmp / "interpreter.trace").read_text(), block_pcs)
+if not interpreter_events or interpreter_events[0][1] != 0x0300:
+    raise SystemExit(f"FAIL: interpreter trace did not reach the program entry: "
+                     f"{interpreter_events[:5]}")
+interpreter_offset = interpreter_events[0][0]
+normalized_interpreter = [(cycles - interpreter_offset, pc)
+                          for cycles, pc in interpreter_events]
+target_block_cycles = cycle_costs[0x0380]
+for name in ("yield-one", "yield-bulk"):
+    actual_events = block_events((tmp / f"{name}.trace").read_text(), block_pcs)
+    actual_events = [
+        (cycles - cycle_costs[pc], pc) for cycles, pc in actual_events
+    ]
+    generation_offset = interpreter_events[0][0] - actual_events[0][0]
+    normalized_actual = [
+        (cycles - actual_events[0][0], pc) for cycles, pc in actual_events
+    ]
+    if normalized_actual != normalized_interpreter:
+        raise SystemExit(f"FAIL: {name} debug events differ at transition boundaries: "
+                         f"{normalized_actual} != {normalized_interpreter}")
+    if probe_prefix(tmp / f"{name}.probes") != probe_prefix(tmp / "interpreter.probes"):
+        raise SystemExit(f"FAIL: {name} probe events differ from interpreter")
+    generated_ram = (tmp / f"{name}.ram").read_bytes()
+    interpreter_ram = (tmp / "interpreter-snapshot.ram").read_bytes()
+    for start, end in ((0x0200, 0x0203), (0x0900, 0x0903)):
+        if generated_ram[start:end] != interpreter_ram[start:end]:
+            raise SystemExit(f"FAIL: {name} RAM differs at ${start:04X}-${end - 1:04X}")
+    def fields(path):
+        return dict(line.split(maxsplit=1) for line in path.read_text().splitlines())
+    generated_regs = fields(tmp / f"{name}.ram.regs")
+    interpreter_regs = fields(tmp / "interpreter-snapshot.ram.regs")
+    for key in ("pc", "a", "x", "y", "sp", "status"):
+        if generated_regs[key] != interpreter_regs[key]:
+            raise SystemExit(f"FAIL: {name} register {key} differs from interpreter")
+    if int(generated_regs["cycles"]) - target_block_cycles + generation_offset != \
+            int(interpreter_regs["cycles"]):
+        raise SystemExit(f"FAIL: {name} transition cycle total differs from interpreter")
+print("Transition debug/probe events, cycles, and repeated-call snapshots match")
+PY
+"$build/tools/apple2tc/apple2tc" "$tmp/same-block.b33" --generation-aware \
+  --run-data="$tmp/same-block.json" >"$tmp/generation-switch-generated.c" \
+  2>"$tmp/same-block-generation-aware.log"
+python3 - "$tmp/generation-switch-generated.c" "$tmp/same-block-timing.probe" <<'PY'
+import pathlib
+import re
+import sys
+
+generated = pathlib.Path(sys.argv[1]).read_text()
+sites = sorted(set(int(value, 16) for value in
+                   re.findall(r"CYCLES\(0x([0-9a-fA-F]+),", generated)))
+assert 0x0380 in sites, sites
+site_list = ", ".join(f"${site:04X}" for site in sites)
+pathlib.Path(sys.argv[2]).write_text(
+    'probe visit(site = pc) { printf("%04X\\n", site) }\n'
+    'probe finish() { stop }\n'
+    f"install visit at {site_list}\n"
+    "install finish at $0380\n")
+PY
+"$build/tools/a2run/a2run" "$tmp/same-block.b33" --from-rom --frames=150 --trace \
+  --probe="$tmp/same-block-timing.probe" \
+  --probe-out="$tmp/same-block-interpreter.probes" \
+  --snapshot-at=0380 --snapshot-out="$tmp/same-block-interpreter-snapshot.ram" \
+  >"$tmp/same-block-interpreter.trace" 2>"$tmp/same-block-interpreter.log"
+cc -std=c11 -I../include -I"$tmp" -c generation-switch-yield-driver.c \
+  -o "$tmp/yield-driver.o"
+c++ "$tmp/yield-driver.o" "$build/lib/a2host/liba2host.a" \
+  "$build/lib/a2io/liba2io.a" -pthread -lm -o "$tmp/yield-one-run"
+"$tmp/yield-one-run" "$tmp/same-block-timing.probe" \
+  "$tmp/same-block-yield-one.probes" "$tmp/same-block-yield-one.ram" 1 \
+  >"$tmp/same-block-yield-one.trace"
+c++ "$tmp/yield-driver.o" "$build/lib/a2host/liba2host.a" \
+  "$build/lib/a2io/liba2io.a" -pthread -lm -o "$tmp/yield-bulk-run"
+"$tmp/yield-bulk-run" "$tmp/same-block-timing.probe" \
+  "$tmp/same-block-yield-bulk.probes" "$tmp/same-block-yield-bulk.ram" 1000 \
+  >"$tmp/same-block-yield-bulk.trace"
+python3 - "$tmp" <<'PY'
+import pathlib
+import re
+import sys
+
+tmp = pathlib.Path(sys.argv[1])
+generated = (tmp / "generation-switch-generated.c").read_text()
+costs = {}
+for pc_text, cycles_text in re.findall(
+        r"CYCLES\(0x([0-9a-fA-F]+),\s*(\d+)\)", generated):
+    pc, cycles = int(pc_text, 16), int(cycles_text)
+    if pc in costs and costs[pc] != cycles:
+        raise SystemExit(f"FAIL: same-block ${pc:04X} has differing state cycle costs")
+    costs[pc] = cycles
+
+def events(path):
+    result = []
+    for line in path.read_text().splitlines():
+        match = re.match(r"\s*(\d+)\s+([0-9A-F]{4}):", line)
+        if match:
+            pc = int(match.group(2), 16)
+            if pc in costs:
+                result.append((int(match.group(1)), pc))
+            if pc == 0x0380:
+                break
+    if not result or result[-1][1] != 0x0380:
+        raise SystemExit(f"FAIL: missing same-block completion event: {result}")
+    return result
+
+interpreter_events = events(tmp / "same-block-interpreter.trace")
+if interpreter_events[0][1] != 0x0300:
+    raise SystemExit(f"FAIL: same-block interpreter missed entry event: {interpreter_events}")
+interpreter_start = interpreter_events[0][0]
+expected_events = [(cycles - interpreter_start, pc)
+                   for cycles, pc in interpreter_events]
+target_cycles = costs[0x0380]
+
+def probes(path):
+    lines = path.read_text().splitlines()
+    return lines[:lines.index("0380") + 1] if "0380" in lines else lines
+
+for name in ("same-block-yield-one", "same-block-yield-bulk"):
+    observed = events(tmp / f"{name}.trace")
+    observed = [(cycles - costs[pc], pc) for cycles, pc in observed]
+    offset = interpreter_events[0][0] - observed[0][0]
+    normalized = [(cycles - observed[0][0], pc) for cycles, pc in observed]
+    if normalized != expected_events:
+        raise SystemExit(f"FAIL: {name} repeated a block/debug event or changed timing")
+    if probes(tmp / f"{name}.probes") != probes(tmp / "same-block-interpreter.probes"):
+        raise SystemExit(f"FAIL: {name} repeated or omitted an intra-block transition probe")
+    for start, end in ((0x0200, 0x0201), (0x0305, 0x0306)):
+        if (tmp / f"{name}.ram").read_bytes()[start:end] != \
+                (tmp / "same-block-interpreter-snapshot.ram").read_bytes()[start:end]:
+            raise SystemExit(f"FAIL: {name} RAM differs at ${start:04X}")
+    def fields(path):
+        return dict(line.split(maxsplit=1) for line in path.read_text().splitlines())
+    generated_regs = fields(tmp / f"{name}.ram.regs")
+    interpreter_regs = fields(tmp / "same-block-interpreter-snapshot.ram.regs")
+    for key in ("pc", "a", "x", "status"):
+        if generated_regs[key] != interpreter_regs[key]:
+            raise SystemExit(f"FAIL: {name} register {key} differs from interpreter")
+    if int(generated_regs["cycles"]) - target_cycles + offset != \
+            int(interpreter_regs["cycles"]):
+        raise SystemExit(f"FAIL: {name} same-block transition cycles differ")
+print("Intra-block transition debug/probe events and yield cycle accounting match")
+PY
+"$build/tools/apple2tc/apple2tc" "$tmp/switch.b33" --generation-aware \
+  --run-data="$tmp/switch.json" >"$tmp/generation-switch-generated.c" \
+  2>"$tmp/generation-aware-generate.log"
 cc -std=c11 -I../include -I"$tmp" -c generation-switch-operand-driver.c \
   -o "$tmp/operand-driver.o"
 c++ "$tmp/operand-driver.o" "$build/lib/a2host/liba2host.a" \
@@ -519,3 +745,27 @@ if "$tmp/ambiguous-pc-run" >"$tmp/ambiguous-pc-generation-aware.log" 2>&1; then
 fi
 grep -q 'Ambiguous generation instruction at \$0300' \
   "$tmp/ambiguous-pc-generation-aware.log"
+
+"$build/tools/apple2tc/apple2tc" "$tmp/no-transition.b33" --simple-c \
+  --run-data="$tmp/no-transition.json" >"$tmp/generation-switch-generated.c" \
+  2>"$tmp/generate.log"
+if grep -q 'APPLE2TC_GENERATION_AWARE' "$tmp/generation-switch-generated.c"; then
+  echo "Ordinary Simple C unexpectedly enabled generation-aware dispatch" >&2
+  exit 1
+fi
+cc -std=c11 -I../include -I"$tmp" -c generation-switch-driver.c -o "$tmp/driver.o"
+c++ "$tmp/driver.o" "$build/lib/a2host/liba2host.a" \
+  "$build/lib/a2io/liba2io.a" -pthread -lm -o "$tmp/generated-run"
+"$tmp/generated-run" >"$tmp/no-option.out"
+python3 - "$tmp" <<'PY'
+import pathlib
+import sys
+
+tmp = pathlib.Path(sys.argv[1])
+ram = (tmp / "no-transition.ram").read_bytes()
+expected = " ".join(f"${addr:04x}={ram[addr]:02x}" for addr in range(0x200, 0x203))
+actual = (tmp / "no-option.out").read_text().strip()
+if actual != expected:
+    raise SystemExit(f"FAIL: ordinary Simple C replay differs: {actual} != {expected}")
+print(f"Ordinary Simple C: {actual}")
+PY
