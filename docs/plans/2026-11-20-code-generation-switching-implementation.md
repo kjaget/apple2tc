@@ -1,13 +1,13 @@
 # Code-generation switching: first implementation plan
 
-Status: Tasks 1-5 are implemented. Task 6 now has an initial, opt-in Simple C
-implementation for the directed low-memory fixtures; ambiguity, timing,
-debug/probe, and repeated-call validation remain open. This is a companion to
-the [living design](2026-11-17-code-generation-switching.md), primarily
-addressing Question 1, bullet 1. Work through the remaining tasks in order;
-each task should be independently reviewable and leave existing default
-behavior and the normal test suite working. Update both documents with
-findings, including findings from refining the tasks themselves.
+Status: Tasks 1-6 produced an initial, opt-in Simple C implementation and
+focused validation for the directed low-memory fixtures. Its per-instruction
+checks do not meet the project's desired generated-code shape. Subsequent
+work is planned in the
+[block-oriented implementation plan](2026-11-25-code-generation-block-dispatch-implementation.md),
+with human review between iterations. This document records the first
+implementation and its evidence; it remains a companion to the
+[living design](2026-11-17-code-generation-switching.md).
 
 ## First product and boundaries
 
@@ -362,10 +362,17 @@ runtime helpers only if needed, generated-C tests.
 fixtures, rejects unknown and ambiguous code, preserves tested transition
 events and cycle totals across repeated calls, and safely resumes the tested
 intra-block replacement. It is not yet a general generation-aware runtime:
-the remaining gates above must pass before widening the documented support
-claim.
+broader transition, state and timing coverage remains necessary before
+widening the documented support claim.
 
 ## Iteration after the first working product
+
+The immediate next iteration is the
+[block-oriented implementation plan](2026-11-25-code-generation-block-dispatch-implementation.md).
+It replaces the initial per-instruction selection strategy with write-driven
+block validity and targeted safe continuations, subject to correctness and
+human review. The investigations below remain relevant; they are not a
+requirement to retain the current check placement.
 
 1. Run the [investigation and validation](2026-11-17-code-generation-switching.md#investigation-and-validation)
    cases; record results and update both plans before choosing optimizations.

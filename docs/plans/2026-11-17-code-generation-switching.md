@@ -5,6 +5,14 @@ test-driven steps are described in the [implementation plan](2026-11-20-code-gen
 Later questions and optimizations remain open. Record implementation findings
 and changes of direction here as the work progresses.
 
+**Next direction:** The first working emitter validates before every
+instruction, which is not the desired generated-code shape. The proposed
+replacement is block-oriented, write-driven invalidation, developed in small
+human-reviewed iterations; see the
+[block-oriented implementation plan](2026-11-25-code-generation-block-dispatch-implementation.md).
+The initial emitter and its tests remain the behavioral baseline, not the
+preferred final structure.
+
 ## Goal
 
 Support programs that replace executable instructions at addresses they have
@@ -295,6 +303,120 @@ RAM banks at the low end of the upper range. The collector's inspection
 path and the host's memory mapping should be considered when designing such
 checks. A blanket runtime opcode fetch at every instruction is contrary to the
 optimization goal even if it is functionally tempting.
+
+### Block-oriented dispatch design
+
+Retain the fixed instruction operations in generated C as the executable
+definition of each version. At a block or safe continuation entry, consult
+compact validity metadata; do not interleave a memory scan or selector with
+every translated instruction. A write that can reach statically embedded code
+updates the metadata using its actual address and value. Writes known not to
+affect any candidate's static code should not invalidate it. An unchanged
+write and a restoration must be represented correctly, not assumed to be a
+new generation.
+
+An illustrative representation is a generation-by-block validity table backed
+by an address-to-constraint index and per-candidate mismatch counts. Each
+constraint represents a byte embedded in a candidate's static code, including
+non-dynamic operands and bytes that are opcodes in an overlapping stream.
+Initialize against actual starting memory; on a tracked write, update only
+constraints for that address using the old and new values. The emitter can
+prove some direct stores irrelevant and omit tracking for them, but unknown
+indexed/indirect destinations, stack writes, and public write helpers need a
+conservative runtime path. This is a proposed first representation to review,
+not a mandate for a literal dense two-dimensional array or a claim that the
+recording describes every possible version.
+
+Block entry alone is insufficient: a store at `$0302` can replace the next
+opcode at `$0305` in the same original block. End a contiguous segment after a
+store that may invalidate its unexecuted suffix, or use an equivalent targeted
+continuation check there; no later affected instruction may execute before
+reselection. Preserve the original block's cycle charge and debug/probe
+boundary when resuming. Unrelated stores must not force a transition, and
+partial overlays, unknown bytes and ambiguity must not silently run stale
+code. Selection is based on actual validity, not `generation + 1`; restoration
+and independent changes require explicit tests and fail-closed handling.
+
+The `generation-same-block.s` fixture proves same-block modification is
+possible, but it does not establish how often it occurs in real programs. The
+working assumption—an educated guess, not a law or measured frequency—is that
+it is exceptional. Bias the common path toward one decision at the original
+block entry and contiguous fixed-code instructions. Handle potentially
+hazardous same-block writes with targeted safe continuations, rather than
+adding checks after every instruction or every store. Unknown runtime-computed
+targets still require conservative treatment; revise this assumption if
+broader evidence changes it.
+
+Whole-state validity and validity at a current continuation are different:
+partially written code elsewhere may coexist temporarily with executable code
+that still matches. A block/suffix check must not promote a partial overlay to
+a complete global state or clear unresolved invalidation. Handle changed
+instruction sizes, CFG entries and overlapping streams explicitly, with
+fallback or rejection if a safe boundary or identity cannot be established.
+The [next implementation plan](2026-11-25-code-generation-block-dispatch-implementation.md)
+spells out the staged proof obligations, generated-output review and
+measurement criteria.
+
+#### Iteration 2 status: contiguous blocks and targeted boundaries
+
+The emitter now keeps ordinary fixed-code instructions contiguous. Every
+original block retains an entry guard; interior guards are emitted only after
+a write whose possible destination intersects static bytes in that block's
+remaining suffix. Absolute and zero-page stores use exact targets, indexed
+stores use their full range, and indirect/dynamic destinations are
+conservative. Stack pushes trigger a possible boundary only when the suffix
+intersects stack page `$0100-$01FF`. Candidate boundary PCs are combined for
+safe resume-case emission when versions have different layouts.
+
+On `generation-switch.s`, generated output is now 41,294 bytes / 1,159 lines,
+with 12 dirty-guard and selector call sites and no interior resume cases,
+compared with the Iteration 0 baseline of 282 guard sites and 343,264 bytes.
+The same-block fixture has 8 guards and 2 resume cases across its candidate
+states; the direct `$0302 STA $0305` and a new indirect store to `$030E` both
+exercise a targeted post-write check. The delayed indirect fixture exercises
+a computed write outside the current suffix. The focused replay suite
+continues to match interpreter RAM, cycles, and probe/debug event sequences
+for its covered cases.
+
+At the end of Iteration 2, the write-maintained mismatch counters were not yet
+the selector authority, and every emitted guard called the whole-state
+matcher. The user approved that output direction at Review Gate 2 and
+requested two follow-up optimizations, now recorded in the implementation
+plan.
+
+#### Iteration 3 status: metadata-driven selection
+
+The whole-memory and per-instruction RAM matchers have been removed.
+Complete-state selection reads whole-state mismatch counters, while the
+dispatch-PC selector checks only block-validity units that contain that PC,
+preferring the caller's active generation when its block remains valid.
+Complete unique matches take precedence; partial states keep the dirty flag
+set, and ambiguous or unknown matches fail closed. Writes set the dirty flag
+only when their actual address and old/new value change an indexed static-code
+constraint; writes to ordinary data and dynamic-only operands do not.
+The generated `generation_validity_constraint_t` records an expected byte for
+a validity-unit counter, while `generation_validity_address_t` indexes the
+contiguous constraint range for one RAM address. Their field meanings and
+counter invariant are documented in the
+[implementation plan](2026-11-25-code-generation-block-dispatch-implementation.md).
+
+The switch fixture now emits 29,833 bytes / 874 lines with 12 guards and
+metadata-selector sites, down from 41,294 bytes / 1,159 lines in Iteration 2.
+This is structural evidence, not the optimization target or a runtime
+measurement. The directed tests verify no simulated-RAM reads in selector
+helpers and retain the same-block, indirect-hit, delayed, preloaded, ambiguity,
+reset, restore, cycle and probe checks. The user approved Iteration 2 and
+Iteration 3 at their respective review gates. The two selector-specialization
+TODOs remain open for a future refinement.
+
+The unused generated `generation_validity_unit_t` descriptor table has been
+removed; tests now validate the mismatch counters directly.
+
+Two further refinements are explicitly deferred: narrow selector work to the
+active generation and exact remaining block/suffix range, and specialize a
+post-write continuation using the effective address and old/new values already
+observed by the write hook. See the TODOs in the
+[block-oriented implementation plan](2026-11-25-code-generation-block-dispatch-implementation.md).
 
 ### First iteration: tracking and transitions
 
@@ -607,8 +729,10 @@ also a learning, even before code is written.
   stores, read-modify-write, indexed/indirect stores, and `push8` converge on
   `ram_poke_impl`. `get_ram()` is const; host/I/O writes outside the shared
   low-memory helper and upper-memory mapping changes remain unsupported.
-- **2026-11-20, Task 5 provisional selection contract:** For low-memory Simple
-  C, mark a candidate code signature dirty on any write to a byte used as a
+- **2026-11-20, Task 5 provisional selection contract (historical;
+  per-instruction placement superseded by the proposed block-oriented
+  direction above):** For low-memory Simple C, mark a candidate code
+  signature dirty on any write to a byte used as a
   compile-time instruction or operand. Revalidate before executing each
   versioned instruction, not merely at a later basic-block entry; a changed
   instruction inside a block requires a boundary at its PC. Match the complete
@@ -621,7 +745,9 @@ also a learning, even before code is written.
   unknown-instruction failure. During a partial write, if the current
   instruction still matches the active state, the dirty flag remains set and
   selection is retried before later instructions. Runtime ambiguity and
-  independent-region tests remain open.
+  independent-region tests were open at that point. Focused state-level and
+  instruction-level ambiguity tests were subsequently added; broader
+  independent-region combinations remain open.
 - **2026-11-20:** `CYCLES` currently charges a whole block and dispatches
   debug/probe events at its entry. Splitting blocks or exiting mid-block for
   a transition needs explicit cycle and event tests, not just equivalent final
@@ -647,8 +773,8 @@ also a learning, even before code is written.
   original block's cycles are charged once; a transition returns after
   restoring the not-yet-executed cycle suffix, and the selected state's resume
   case charges its own suffix without a second block-entry event. The directed
-  same-block fixture passes, but cycle totals and exact debug/probe event
-  equivalence still need dedicated assertions.
+  same-block fixture passes. Dedicated assertions were subsequently added for
+  selected transition cycles and debug/probe events, not general timing.
 - **2026-11-20, Task 6 replay validation:** `bash
   tests/generation-switch-test.sh build` compiles and runs generation-aware
   Simple C for installed/replaced/restored, delayed, preloaded
@@ -659,6 +785,63 @@ also a learning, even before code is written.
   original mismatch remains isolated to the opt-in implementation. These tests
   do not yet compare all registers, cycles, probes, repeated calls, or
   ambiguous independent code regions.
+- **2026-11-25, direction after generated-code review:** The initial output
+  for the directed switch places dirty checks and possible whole-signature
+  scans between instructions, and duplicates suffix resume cases. This passes
+  directed tests but conflicts with the goal of large, readable, optimizable
+  fixed-opcode blocks. Prioritize write-driven validity and safe block/suffix
+  boundaries next; require human review of emitted C after each iteration.
+  Existing timing, yield and ambiguity tests supply evidence for their tested
+  cases only; do not interpret this direction as having been implemented.
+- **2026-11-25, Iteration 0 baseline:** A fresh `generation-switch.s`
+  generation-aware capture emitted 343,264 bytes (7,368 lines), with 2
+  distinct state functions from 4 run-data generations, 144 embedded
+  whole-state RAM-byte comparisons, 282 dirty-guard/whole-state matcher
+  sites, 282 current-PC fallback call sites, and 50 resume cases. The
+  `$0300-$0318` block and `$0900-$0902` block both have checks between
+  consecutive instructions; `$0901` remains a dynamic immediate operand.
+  `bash tests/generation-switch-test.sh build` passed using the existing
+  `build/` binaries. These are source-shape and directed-test observations,
+  not runtime-performance or general-equivalence claims. See the detailed
+  state/block map and overlap example in the
+  [block-oriented implementation plan](2026-11-25-code-generation-block-dispatch-implementation.md).
+- **2026-11-25, Review gate 0:** The user approved Iteration 1 as drafted and
+  clarified that the same-block fixture is evidence of possibility, not
+  prevalence. The design now treats same-block modification as an exceptional
+  path based on an explicitly unproven educated guess, while retaining
+  conservative handling for potentially affected suffixes and computed
+  destinations.
+- **2026-11-25, Iteration 1 validity metadata:** The opt-in emitter now emits a
+  sparse address-to-constraint index and mismatch counters for each distinct
+  whole state and each candidate block. Initialization uses direct RAM bytes;
+  supported low-memory writes update affected counts from old/new values in
+  `ram_poke_impl`. This bookkeeping is validated alongside, but does not yet
+  replace or alter, the original dirty-flag dispatch. Focused replay and
+  direct-count tests pass; Review Gate 1 was approved before Iteration 2.
+- **2026-11-25, Iteration 2 block dispatch:** The generator replaces
+  instruction-by-instruction guard emission with block-entry guards and
+  targeted post-write continuations. For the switch fixture, emitted output
+  fell from 351,582 bytes / 7,813 lines after Iteration 1 to 41,294 bytes /
+  1,159 lines, and guard/selector sites fell from 282 to 12. The
+  same-block and new indirect-hit fixtures pass; the delayed indirect fixture
+  exercises a computed write outside the current suffix. Selector calls still
+  scan simulated bytes, so this is not the final metadata-driven dispatch.
+  The generated block excerpt, test evidence and remaining limits are in the
+  [Iteration 2 implementation report](2026-11-25-code-generation-block-dispatch-implementation.md).
+  Review Gate 2 was approved; the user said counts are useful evidence but not
+  the optimization goal, and requested TODOs for generation/range-directed
+  selection and effective-address/value-directed continuation selection.
+- **2026-11-25, Iteration 3 metadata selection:** The emitted selector now
+  reads per-candidate whole-state and block mismatch counters rather than
+  simulated RAM. A dispatch PC maps only to block units containing that PC;
+  the active generation is preferred if valid, otherwise a unique local
+  candidate is required. The write tracker reports whether a changed byte
+  affected a static-code constraint, so ordinary-data and dynamic-only operand
+  writes do not set the dirty flag. Focused replay and selector-output checks
+  pass; the unused emitted unit descriptor table was removed. Broader
+  partial/independent-region behavior and the Gate 2 directed selector
+  refinements remain open. Review Gate 3 was approved by the user;
+  no further refinement iteration has started.
 
 [blog-dynamic]: https://tmikov.blogspot.com/2021/12/apple2tc-apple-ii-binary-to-c_24.html
 [blog-ir]: https://tmikov.blogspot.com/2022/01/apple2tc-apple-ii-binary-to-c_23.html

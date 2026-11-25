@@ -10,6 +10,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static uint16_t s_pc = 0;
@@ -27,6 +28,8 @@ static uint8_t s_ram[0x10000];
 #ifdef APPLE2TC_GENERATION_AWARE
 static bool s_generation_dirty = false;
 static unsigned s_active_generation = 0;
+static void generation_initialize_validity(void);
+static bool generation_track_write(uint16_t addr, uint8_t old_value, uint8_t new_value);
 #endif
 
 uint8_t g_debug = 0;
@@ -74,6 +77,7 @@ void reset_regs(void) {
 #ifdef APPLE2TC_GENERATION_AWARE
   s_active_generation = 0;
   s_generation_dirty = true;
+  generation_initialize_validity();
 #endif
 }
 
@@ -117,10 +121,15 @@ static inline void ram_poke_impl(uint16_t addr, uint8_t value) {
     io_poke(addr, value);
     return;
   }
+#ifdef APPLE2TC_GENERATION_AWARE
+  uint8_t old_value = s_ram[addr];
+#endif
   s_ram[addr] = value;
 #ifdef APPLE2TC_GENERATION_AWARE
-  if (addr < 0xC000)
-    s_generation_dirty = true;
+  if (addr < 0xC000) {
+    if (generation_track_write(addr, old_value, value))
+      s_generation_dirty = true;
+  }
 #endif
 }
 void ram_poke(uint16_t addr, uint8_t value) {

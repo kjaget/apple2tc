@@ -11,6 +11,12 @@ cd "$(dirname "$0")"
 tmp=$(mktemp -d)
 trap 'rm -f "$tmp/switch.b33" "$tmp/preloaded.b33" "$tmp/delayed.b33" \
   "$tmp/no-transition.b33" "$tmp/same-block.b33" "$tmp/states.b33" "$tmp/switch.ram" \
+  "$tmp/validity-rmw.b33" "$tmp/validity-rmw.ram" "$tmp/validity-rmw.ram.regs" \
+  "$tmp/validity-rmw.json" "$tmp/validity-rmw.log" \
+  "$tmp/validity-indirect-hit.b33" "$tmp/validity-indirect-hit.ram" \
+  "$tmp/validity-indirect-hit.ram.regs" "$tmp/validity-indirect-hit.json" \
+  "$tmp/validity-indirect-hit.log" "$tmp/validity-indirect-hit-generation-aware.log" \
+  "$tmp/validity-indirect-hit-aware.out" \
   "$tmp/stack-written-code.b33" "$tmp/stack-written-code.ram" \
   "$tmp/stack-written-code.ram.regs" "$tmp/stack-written-code.json" \
   "$tmp/ambiguous.b33" "$tmp/ambiguous.json" \
@@ -27,6 +33,10 @@ trap 'rm -f "$tmp/switch.b33" "$tmp/preloaded.b33" "$tmp/delayed.b33" \
   "$tmp/no-transition.log" "$tmp/same-block.log" \
   "$tmp/generation-switch-generated.c" "$tmp/generate.log" "$tmp/driver.o" \
   "$tmp/generated-run" "$tmp/generated.out" "$tmp/generation-aware-generate.log" \
+  "$tmp/validity-rmw-generation-aware.log" "$tmp/validity-rmw-aware.out" \
+  "$tmp/validity-driver.o" "$tmp/validity-run" "$tmp/validity.out" \
+  "$tmp/overlap-validity-driver.o" "$tmp/overlap-validity-run" \
+  "$tmp/overlap-validity.out" \
   "$tmp/generation-switch.probe" "$tmp/interpreter.trace" "$tmp/interpreter.log" \
   "$tmp/interpreter.probes" "$tmp/interpreter-snapshot.ram" \
   "$tmp/interpreter-snapshot.ram.regs" "$tmp/yield-one.trace" \
@@ -58,10 +68,13 @@ trap 'rm -f "$tmp/switch.b33" "$tmp/preloaded.b33" "$tmp/delayed.b33" \
 "$build/tools/a6502/a6502" generation-switch-delayed.s "$tmp/delayed.b33"
 "$build/tools/a6502/a6502" generation-switch-no-transition.s "$tmp/no-transition.b33"
 "$build/tools/a6502/a6502" generation-same-block.s "$tmp/same-block.b33"
+"$build/tools/a6502/a6502" generation-validity-rmw.s "$tmp/validity-rmw.b33"
+"$build/tools/a6502/a6502" generation-validity-indirect-hit.s \
+  "$tmp/validity-indirect-hit.b33"
 "$build/tools/a6502/a6502" generation-stack-written-code.s "$tmp/stack-written-code.b33"
 "$build/tools/a6502/a6502" generation-state.s "$tmp/states.b33"
 "$build/tools/a6502/a6502" generation-switch-ambiguous.s "$tmp/ambiguous.b33"
-for name in switch preloaded delayed no-transition same-block; do
+for name in switch preloaded delayed no-transition same-block validity-rmw validity-indirect-hit; do
   if ! "$build/tools/a2run/a2run" "$tmp/$name.b33" --collect --limit=20 --frames=150 \
       --snapshot-at=0380 --snapshot-out="$tmp/$name.ram" --out="$tmp/$name.json" \
       >"$tmp/$name.log" 2>&1; then
@@ -429,6 +442,38 @@ fi
 grep -Fq '/* $030C LDA */ s_a = update_nz(0x11);' "$tmp/generation-switch-generated.c"
 grep -Fq '/* $0900 LDA */ s_a = update_nz(peek(0x0901));' \
   "$tmp/generation-switch-generated.c"
+python3 - "$tmp/generation-switch-generated.c" <<'PY'
+import pathlib
+import re
+import sys
+
+generated = pathlib.Path(sys.argv[1]).read_text()
+
+if "generation_validity_unit_t" in generated or "s_generation_validity_units" in generated:
+    raise SystemExit("FAIL: unused generation validity unit table was emitted")
+
+def block_cases(address):
+    pattern = re.compile(
+        rf"^    case 0x{address:04x}: // \[\$.*?"
+        r"(?=^    case 0x[0-9a-fA-F]{4}:|^  \})",
+        re.MULTILINE | re.DOTALL)
+    return pattern.findall(generated)
+
+cases = block_cases(0x0300)
+if not cases or any(case.count("if (s_generation_dirty)") != 1 for case in cases):
+    raise SystemExit("FAIL: ordinary block has checks between translated instructions")
+selector_start = generated.index("static int generation_complete_match(void)")
+selector_end = generated.index("static void run_generation_0(", selector_start)
+selector_code = generated[selector_start:selector_end]
+if "s_ram[" in selector_code or "generation_match(void)" in selector_code:
+    raise SystemExit("FAIL: generation selector still scans simulated memory")
+print("Generation-aware switch output: "
+      f"{len(generated.encode())} bytes / {len(generated.splitlines())} lines, "
+      f"{generated.count('if (s_generation_dirty)')} dirty guards, "
+      f"{generated.count('int selected = generation_match_at_pc(')} block selectors, "
+      f"{generated.count('int complete = generation_complete_match();')} full-state counter checks, "
+      f"{generated.count('// resume inside block')} resume cases")
+PY
 python3 - "$tmp/generation-switch-generated.c" "$tmp/generation-switch.probe" <<'PY'
 import pathlib
 import re
@@ -450,7 +495,8 @@ PY
   --trace --probe="$tmp/generation-switch.probe" --probe-out="$tmp/interpreter.probes" \
   --snapshot-at=0380 --snapshot-out="$tmp/interpreter-snapshot.ram" \
   >"$tmp/interpreter.trace" 2>"$tmp/interpreter.log"
-cc -std=c11 -I../include -I"$tmp" -c generation-switch-driver.c -o "$tmp/driver.o"
+cc -std=c11 -DCHECK_GENERATION_VALIDITY -I../include -I"$tmp" \
+  -c generation-switch-driver.c -o "$tmp/driver.o"
 c++ "$tmp/driver.o" "$build/lib/a2host/liba2host.a" "$build/lib/a2io/liba2io.a" \
   -pthread -lm -o "$tmp/generated-run"
 "$tmp/generated-run" >"$tmp/generated-aware.out"
@@ -554,6 +600,31 @@ PY
 "$build/tools/apple2tc/apple2tc" "$tmp/same-block.b33" --generation-aware \
   --run-data="$tmp/same-block.json" >"$tmp/generation-switch-generated.c" \
   2>"$tmp/same-block-generation-aware.log"
+python3 - "$tmp/generation-switch-generated.c" <<'PY'
+import pathlib
+import re
+import sys
+
+generated = pathlib.Path(sys.argv[1]).read_text()
+pattern = re.compile(
+    r"^    case 0x0300: // \[\$.*?(?=^    case 0x[0-9a-fA-F]{4}:|^  \})",
+    re.MULTILINE | re.DOTALL)
+cases = pattern.findall(generated)
+if not cases:
+    raise SystemExit("FAIL: same-block entry case was not emitted")
+for case in cases:
+    checks = [match.start() for match in re.finditer(r"if \(s_generation_dirty\)", case)]
+    store = case.find("/* $0302 STA */")
+    target = case.find("/* $0305 ")
+    if len(checks) != 2 or store < 0 or target < 0 or not store < checks[1] < target:
+        raise SystemExit("FAIL: same-block write lacks one targeted continuation check")
+print("Same-block output: "
+      f"{len(generated.encode())} bytes / {len(generated.splitlines())} lines, "
+      f"{generated.count('if (s_generation_dirty)')} dirty guards, "
+      f"{generated.count('int selected = generation_match_at_pc(')} block selectors, "
+      f"{generated.count('int complete = generation_complete_match();')} full-state counter checks, "
+      f"{generated.count('// resume inside block')} resume cases")
+PY
 python3 - "$tmp/generation-switch-generated.c" "$tmp/same-block-timing.probe" <<'PY'
 import pathlib
 import re
@@ -656,6 +727,13 @@ PY
 "$build/tools/apple2tc/apple2tc" "$tmp/switch.b33" --generation-aware \
   --run-data="$tmp/switch.json" >"$tmp/generation-switch-generated.c" \
   2>"$tmp/generation-aware-generate.log"
+cc -std=c11 -I../include -I"$tmp" -c generation-validity-driver.c \
+  -o "$tmp/validity-driver.o"
+c++ "$tmp/validity-driver.o" "$build/lib/a2host/liba2host.a" \
+  "$build/lib/a2io/liba2io.a" -pthread -lm -o "$tmp/validity-run"
+"$tmp/validity-run" >"$tmp/validity.out"
+grep -q '^Generation validity metadata updates and reinitializes correctly$' \
+  "$tmp/validity.out"
 cc -std=c11 -I../include -I"$tmp" -c generation-switch-operand-driver.c \
   -o "$tmp/operand-driver.o"
 c++ "$tmp/operand-driver.o" "$build/lib/a2host/liba2host.a" \
@@ -668,7 +746,8 @@ run_generation_aware_fixture() {
   "$build/tools/apple2tc/apple2tc" "$tmp/$name.b33" --generation-aware \
     --run-data="$tmp/$name.json" >"$tmp/generation-switch-generated.c" \
     2>"$tmp/$name-generation-aware.log"
-  cc -std=c11 -I../include -I"$tmp" -c generation-switch-driver.c -o "$tmp/driver.o"
+  cc -std=c11 -DCHECK_GENERATION_VALIDITY -I../include -I"$tmp" \
+    -c generation-switch-driver.c -o "$tmp/driver.o"
   c++ "$tmp/driver.o" "$build/lib/a2host/liba2host.a" "$build/lib/a2io/liba2io.a" \
     -pthread -lm -o "$tmp/generated-run"
   "$tmp/generated-run" >"$tmp/$name-aware.out"
@@ -689,10 +768,72 @@ for name in ("delayed", "preloaded"):
         raise SystemExit(f"FAIL: generation-aware {name} replay differs from interpreter")
 PY
 
+"$build/tools/apple2tc/apple2tc" "$tmp/validity-rmw.b33" --generation-aware \
+  --run-data="$tmp/validity-rmw.json" >"$tmp/generation-switch-generated.c" \
+  2>"$tmp/validity-rmw-generation-aware.log"
+cc -std=c11 -DCHECK_GENERATION_VALIDITY -DPRESERVE_START_PC -I../include -I"$tmp" \
+  -c generation-switch-driver.c -o "$tmp/driver.o"
+c++ "$tmp/driver.o" "$build/lib/a2host/liba2host.a" "$build/lib/a2io/liba2io.a" \
+  -pthread -lm -o "$tmp/generated-run"
+"$tmp/generated-run" >"$tmp/validity-rmw-aware.out"
+python3 - "$tmp" <<'PY'
+import pathlib
+import sys
+
+tmp = pathlib.Path(sys.argv[1])
+ram = (tmp / "validity-rmw.ram").read_bytes()
+expected = " ".join(f"${addr:04x}={ram[addr]:02x}" for addr in range(0x200, 0x203))
+actual = (tmp / "validity-rmw-aware.out").read_text().strip()
+if actual != expected:
+    raise SystemExit(f"FAIL: read-modify-write replay differs: {actual} != {expected}")
+print("Read-modify-write generation validity matches RAM")
+PY
+
+"$build/tools/apple2tc/apple2tc" "$tmp/validity-indirect-hit.b33" --generation-aware \
+  --run-data="$tmp/validity-indirect-hit.json" >"$tmp/generation-switch-generated.c" \
+  2>"$tmp/validity-indirect-hit-generation-aware.log"
+python3 - "$tmp/generation-switch-generated.c" <<'PY'
+import pathlib
+import re
+import sys
+
+generated = pathlib.Path(sys.argv[1]).read_text()
+pattern = re.compile(
+    r"^    case 0x0300: // \[\$.*?(?=^    case 0x[0-9a-fA-F]{4}:|^  \})",
+    re.MULTILINE | re.DOTALL)
+cases = pattern.findall(generated)
+if not cases:
+    raise SystemExit("FAIL: computed-store block was not emitted")
+for case in cases:
+    checks = [match.start() for match in re.finditer(r"if \(s_generation_dirty\)", case)]
+    store = case.find("/* $030C STA */")
+    target = case.find("/* $030E ")
+    if len(checks) != 2 or store < 0 or target < 0 or not store < checks[1] < target:
+        raise SystemExit("FAIL: indirect same-block store lacks a targeted continuation")
+PY
+cc -std=c11 -DCHECK_GENERATION_VALIDITY -I../include -I"$tmp" \
+  -c generation-switch-driver.c -o "$tmp/driver.o"
+c++ "$tmp/driver.o" "$build/lib/a2host/liba2host.a" "$build/lib/a2io/liba2io.a" \
+  -pthread -lm -o "$tmp/generated-run"
+"$tmp/generated-run" >"$tmp/validity-indirect-hit-aware.out"
+python3 - "$tmp" <<'PY'
+import pathlib
+import sys
+
+tmp = pathlib.Path(sys.argv[1])
+ram = (tmp / "validity-indirect-hit.ram").read_bytes()
+expected = " ".join(f"${addr:04x}={ram[addr]:02x}" for addr in range(0x200, 0x203))
+actual = (tmp / "validity-indirect-hit-aware.out").read_text().strip()
+if actual != expected:
+    raise SystemExit(f"FAIL: indirect same-block replay differs: {actual} != {expected}")
+print("Indirect same-block transition matches interpreter RAM")
+PY
+
 "$build/tools/apple2tc/apple2tc" "$tmp/same-block.b33" --generation-aware \
   --run-data="$tmp/same-block.json" >"$tmp/generation-switch-generated.c" \
   2>"$tmp/same-block-generation-aware.log"
-cc -std=c11 -I../include -I"$tmp" -c generation-switch-driver.c -o "$tmp/driver.o"
+cc -std=c11 -DCHECK_GENERATION_VALIDITY -I../include -I"$tmp" \
+  -c generation-switch-driver.c -o "$tmp/driver.o"
 c++ "$tmp/driver.o" "$build/lib/a2host/liba2host.a" "$build/lib/a2io/liba2io.a" \
   -pthread -lm -o "$tmp/generated-run"
 "$tmp/generated-run" >"$tmp/same-block-aware.out"
@@ -725,6 +866,13 @@ grep -q 'Unknown generation instruction at \$0900' "$tmp/unknown-generation-awar
 "$build/tools/apple2tc/apple2tc" "$tmp/ambiguous.b33" --generation-aware \
   --run-data="$tmp/ambiguous.json" >"$tmp/generation-switch-generated.c" \
   2>"$tmp/generation-aware-generate.log"
+cc -std=c11 -I../include -I"$tmp" -c generation-validity-overlap-driver.c \
+  -o "$tmp/overlap-validity-driver.o"
+c++ "$tmp/overlap-validity-driver.o" "$build/lib/a2host/liba2host.a" \
+  "$build/lib/a2io/liba2io.a" -pthread -lm -o "$tmp/overlap-validity-run"
+"$tmp/overlap-validity-run" >"$tmp/overlap-validity.out"
+grep -q '^Overlapping opcode/operand byte remains tracked where it is static$' \
+  "$tmp/overlap-validity.out"
 cc -std=c11 -I../include -I"$tmp" -c generation-switch-ambiguous-driver.c \
   -o "$tmp/ambiguous-driver.o"
 c++ "$tmp/ambiguous-driver.o" "$build/lib/a2host/liba2host.a" \
@@ -743,7 +891,7 @@ if "$tmp/ambiguous-pc-run" >"$tmp/ambiguous-pc-generation-aware.log" 2>&1; then
   echo "Expected ambiguous current-PC instructions to fail closed" >&2
   exit 1
 fi
-grep -q 'Ambiguous generation instruction at \$0300' \
+grep -q 'Ambiguous generation block at \$0300' \
   "$tmp/ambiguous-pc-generation-aware.log"
 
 "$build/tools/apple2tc/apple2tc" "$tmp/no-transition.b33" --simple-c \

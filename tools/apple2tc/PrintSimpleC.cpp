@@ -10,6 +10,8 @@
 
 #include "Disas.h"
 
+#include <limits>
+
 #include "apple2tc/apple2iodefs.h"
 #include "apple2tc/apple2plus_rom.h"
 #include "apple2tc/support.h"
@@ -33,23 +35,27 @@ static bool sameCode(const SimpleCCode &a, const SimpleCCode &b) {
 
 static void printGenerationCheck(FILE *f, uint16_t pc, unsigned cycleAdjustment) {
   fprintf(f, "      if (s_generation_dirty) {\n");
-  fprintf(f, "        int selected = generation_match();\n");
   fprintf(f,
-          "        bool completeMatch = selected >= 0;\n"
-          "        if (selected == -2) { fprintf(stderr, \"Ambiguous generation state at "
-          "$%%04X\\n\", s_pc); error_handler(s_pc); return; }\n"
-          "        if (selected < 0) {\n"
-          "          if (generation_instruction_matches(s_active_generation, s_pc)) {\n"
-          "            selected = (int)s_active_generation;\n"
-          "          } else {\n"
-          "            selected = generation_match_at_pc(s_pc);\n"
-          "            if (selected == -2) { fprintf(stderr, \"Ambiguous generation instruction "
-          "at $%%04X\\n\", s_pc); error_handler(s_pc); return; }\n"
-          "            if (selected < 0) { fprintf(stderr, \"Unknown generation instruction at "
-          "$%%04X\\n\", s_pc); error_handler(s_pc); return; }\n"
-          "          }\n"
-          "        }\n"
-          "        if (completeMatch) s_generation_dirty = false;\n");
+          "        int complete = generation_complete_match();\n"
+          "        if (complete == -2) { fprintf(stderr, \"Ambiguous generation state at "
+          "$%%04X\\n\", 0x%04x); error_handler(0x%04x); return; }\n",
+          pc,
+          pc);
+  fprintf(f,
+          "        int selected = generation_match_at_pc("
+          "complete >= 0 ? (unsigned)complete : s_active_generation, "
+          "0x%04x, complete >= 0);\n",
+          pc);
+  fprintf(f,
+          "        if (selected == -2) { fprintf(stderr, \"Ambiguous generation block at "
+          "$%%04X\\n\", 0x%04x); error_handler(0x%04x); return; }\n"
+          "        if (selected < 0) { fprintf(stderr, \"Unknown generation instruction at "
+          "$%%04X\\n\", 0x%04x); error_handler(0x%04x); return; }\n"
+          "        if (complete >= 0) s_generation_dirty = false;\n",
+          pc,
+          pc,
+          pc,
+          pc);
   fprintf(f, "        if ((unsigned)selected != s_active_generation) {\n");
   if (cycleAdjustment) {
     fprintf(f, "          s_cycles -= %u;\n", cycleAdjustment);
@@ -61,6 +67,101 @@ static void printGenerationCheck(FILE *f, uint16_t pc, unsigned cycleAdjustment)
   fprintf(f, "          return;\n");
   fprintf(f, "        }\n");
   fprintf(f, "      }\n");
+}
+
+static bool instructionWritesMemory(CPUInst inst) {
+  switch (inst.kind) {
+  case CPUInstKind::ASL:
+  case CPUInstKind::LSR:
+  case CPUInstKind::ROL:
+  case CPUInstKind::ROR:
+    return inst.addrMode != CPUAddrMode::A;
+  case CPUInstKind::BRK:
+  case CPUInstKind::DEC:
+  case CPUInstKind::INC:
+  case CPUInstKind::JSR:
+  case CPUInstKind::PHA:
+  case CPUInstKind::PHP:
+  case CPUInstKind::STA:
+  case CPUInstKind::STX:
+  case CPUInstKind::STY:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static bool memorySuffixContainsRange(const std::set<uint16_t> &suffixBytes,
+                                      uint16_t start,
+                                      uint16_t end) {
+  auto it = suffixBytes.lower_bound(start);
+  return it != suffixBytes.end() && *it <= end;
+}
+
+static bool memoryWriteMayHitSuffix(CPUInst inst, const std::set<uint16_t> &suffixBytes) {
+  if (suffixBytes.empty())
+    return false;
+
+  if (inst.kind == CPUInstKind::BRK || inst.kind == CPUInstKind::JSR ||
+      inst.kind == CPUInstKind::PHA || inst.kind == CPUInstKind::PHP) {
+    return memorySuffixContainsRange(suffixBytes, 0x0100, 0x01ff);
+  }
+
+  switch (inst.addrMode) {
+  case CPUAddrMode::Abs:
+    return suffixBytes.count(inst.operand) != 0;
+  case CPUAddrMode::Zpg:
+    return suffixBytes.count((uint8_t)inst.operand) != 0;
+  case CPUAddrMode::Abs_X:
+  case CPUAddrMode::Abs_Y:
+    if ((uint32_t)inst.operand + 0xff <= 0xffff)
+      return memorySuffixContainsRange(
+          suffixBytes, inst.operand, (uint16_t)(inst.operand + 0xff));
+    return memorySuffixContainsRange(suffixBytes, inst.operand, 0xffff) ||
+           memorySuffixContainsRange(
+               suffixBytes, 0, (uint16_t)(inst.operand + 0xff));
+  case CPUAddrMode::Zpg_X:
+  case CPUAddrMode::Zpg_Y:
+    return memorySuffixContainsRange(suffixBytes, 0, 0x00ff);
+  case CPUAddrMode::Ind:
+  case CPUAddrMode::X_Ind:
+  case CPUAddrMode::Ind_Y:
+    return true;
+  case CPUAddrMode::A:
+  case CPUAddrMode::Imm:
+  case CPUAddrMode::Implied:
+  case CPUAddrMode::Rel:
+  case CPUAddrMode::_last:
+  case CPUAddrMode::_invalid:
+    return true;
+  }
+  return true;
+}
+
+static std::set<uint16_t> generationTransitionBoundaries(
+    const Disas &state,
+    const std::vector<std::pair<uint16_t, CPUInst>> &instructions,
+    const std::set<uint16_t> &dynamicOperands) {
+  std::set<uint16_t> boundaries;
+    std::set<uint16_t> suffixBytes;
+    for (size_t i = instructions.size(); i-- > 0;) {
+    const auto [pc, inst] = instructions[i];
+      if (i + 1 < instructions.size() && instructionWritesMemory(inst)) {
+        bool dynamicTarget = dynamicOperands.count(pc) || state.recordedOperandChanged(pc);
+        for (unsigned byteIndex = 1; !dynamicTarget && byteIndex < inst.size; ++byteIndex)
+          dynamicTarget = state.checkSelfModified((uint16_t)(pc + byteIndex)).has_value();
+
+        if (dynamicTarget || memoryWriteMayHitSuffix(inst, suffixBytes))
+          boundaries.insert(instructions[i + 1].first);
+      }
+
+      for (unsigned byteIndex = 0; byteIndex < inst.size; ++byteIndex) {
+        if (byteIndex && dynamicOperands.count(pc))
+          continue;
+        suffixBytes.insert((uint16_t)(pc + byteIndex));
+      }
+  }
+  return boundaries;
 }
 
 } // namespace
@@ -88,7 +189,10 @@ void Disas::printSimpleCPrologue(FILE *f, bool generationAware) {
     fprintf(f, "  s_pc = 0x%04x;\n", *start_);
   }
   if (generationAware)
-    fprintf(f, "  s_active_generation = 0;\n  s_generation_dirty = false;\n");
+    fprintf(f,
+            "  s_active_generation = 0;\n"
+            "  s_generation_dirty = false;\n"
+            "  generation_initialize_validity();\n");
   fprintf(f, "}\n");
 }
 
@@ -320,52 +424,248 @@ void Disas::printSimpleCGenerations(FILE *f, const std::vector<Disas *> &states)
     }
   }
 
+  struct ValidityUnit {
+    std::map<uint16_t, uint8_t> constraints;
+  };
+  std::vector<ValidityUnit> validityUnits;
+  std::vector<size_t> wholeStateValidityUnits;
+  using PCValidityUnits = std::map<uint16_t, std::map<size_t, std::set<size_t>>>;
+  PCValidityUnits pcValidityUnits;
+  auto addConstraint = [](ValidityUnit &unit, uint16_t addr, uint8_t value) {
+    auto [it, inserted] = unit.constraints.emplace(addr, value);
+    if (!inserted && it->second != value)
+      throw std::runtime_error(format(
+          "--generation-aware found conflicting byte constraints at $%04X", addr));
+  };
+  for (size_t candidate = 0; candidate < representativeStates.size(); ++candidate) {
+    ValidityUnit unit;
+    wholeStateValidityUnits.push_back(validityUnits.size());
+    for (const auto &[addr, byte] : signatures[representativeStates[candidate]])
+      addConstraint(unit, addr, byte);
+    validityUnits.push_back(std::move(unit));
+  }
+
+  for (size_t candidate = 0; candidate < representativeStates.size(); ++candidate) {
+    const Disas &state = *states[representativeStates[candidate]];
+    for (const auto &[blockAddress, block] : state.asmBlocks_) {
+      if (!state.canDecodeCode((uint16_t)blockAddress))
+        continue;
+      ValidityUnit unit;
+      const size_t unitIndex = validityUnits.size();
+      for (const auto &[pc, inst] : block.instructions(&state)) {
+        pcValidityUnits[pc][candidate].insert(unitIndex);
+        for (unsigned i = 0; i < inst.size; ++i) {
+          if (i && dynamicOperands.count(pc))
+            continue;
+          addConstraint(unit, (uint16_t)(pc + i), state.peek((uint16_t)(pc + i)));
+        }
+      }
+      validityUnits.push_back(std::move(unit));
+    }
+  }
+
+  std::set<uint16_t> generationResumePCs;
+  std::set<uint16_t> generationDispatchPCs;
+  for (size_t candidate = 0; candidate < representativeStates.size(); ++candidate) {
+    Disas &state = *states[representativeStates[candidate]];
+    state.simpleCDynamicOperands_ = dynamicOperands;
+    for (const auto &[blockAddress, block] : state.asmBlocks_) {
+      (void)blockAddress;
+      if (!state.canDecodeCode((uint16_t)block.addr()))
+        continue;
+      generationDispatchPCs.insert((uint16_t)block.addr());
+      std::vector<std::pair<uint16_t, CPUInst>> instructions;
+      for (const auto &instruction : block.instructions(&state))
+        instructions.push_back(instruction);
+      auto boundaries =
+          generationTransitionBoundaries(state, instructions, state.simpleCDynamicOperands_);
+      generationResumePCs.insert(boundaries.begin(), boundaries.end());
+      generationDispatchPCs.insert(boundaries.begin(), boundaries.end());
+    }
+  }
+  for (size_t stateIndex : representativeStates)
+    states[stateIndex]->simpleCGenerationResumePCs_ = generationResumePCs;
+
+  using AddressConstraints = std::map<uint16_t, std::vector<std::pair<size_t, uint8_t>>>;
+  AddressConstraints addressConstraints;
+  for (size_t unitIndex = 0; unitIndex < validityUnits.size(); ++unitIndex)
+    for (const auto &[addr, expected] : validityUnits[unitIndex].constraints)
+      addressConstraints[addr].emplace_back(unitIndex, expected);
+
   printSimpleCPrologue(f, true);
-  fprintf(f, "\nstatic int generation_match(void) {\n");
+  fprintf(f,
+          "\n/* One expected byte for a validity unit. */\n"
+          "/* unit indexes the mismatch counter; expected is the required byte at that address. */\n"
+          "typedef struct {\n"
+          "  size_t unit;\n"
+          "  uint8_t expected;\n"
+          "} generation_validity_constraint_t;\n"
+          "/* Sorted by address; first/count select this address's constraints. */\n"
+          "typedef struct {\n"
+          "  uint16_t address;\n"
+          "  size_t first;\n"
+          "  size_t count;\n"
+          "} generation_validity_address_t;\n");
+  fprintf(f,
+          "/* Maps candidate generation IDs to whole-state mismatch-counter indexes. */\n");
+  fprintf(f, "static const size_t s_generation_whole_state_units[%zu] = {",
+          wholeStateValidityUnits.size());
+  for (size_t i = 0; i < wholeStateValidityUnits.size(); ++i)
+    fprintf(f, "%s%zu", i ? ", " : "", wholeStateValidityUnits[i]);
+  fprintf(f, "};\n");
+
+  size_t constraintCount = 0;
+  for (const auto &[addr, constraints] : addressConstraints) {
+    (void)addr;
+    if (constraints.size() > std::numeric_limits<size_t>::max() - constraintCount)
+      throw std::runtime_error("--generation-aware validity constraint count overflows size_t");
+    constraintCount += constraints.size();
+  }
+  fprintf(f,
+          "static const generation_validity_constraint_t "
+          "s_generation_validity_constraints[%zu] = {\n",
+          constraintCount);
+  size_t constraintOffset = 0;
+  for (const auto &[addr, constraints] : addressConstraints) {
+    (void)addr;
+    for (const auto &[unit, expected] : constraints) {
+      fprintf(f, "  {%zu, 0x%02x},\n", unit, expected);
+      ++constraintOffset;
+    }
+  }
+  assert(constraintOffset == constraintCount);
+  fprintf(f, "};\n");
+
+  fprintf(f,
+          "static const generation_validity_address_t "
+          "s_generation_validity_addresses[%zu] = {\n",
+          addressConstraints.size());
+  constraintOffset = 0;
+  for (const auto &[addr, constraints] : addressConstraints) {
+    fprintf(f,
+            "  {0x%04x, %zu, %zu},\n",
+            addr,
+            constraintOffset,
+            constraints.size());
+    constraintOffset += constraints.size();
+  }
+  fprintf(f, "};\n");
+  fprintf(f,
+          "/* Counter: number of this unit's expected bytes that differ from RAM. */\n"
+          "static size_t s_generation_validity_mismatches[%zu];\n"
+          "static bool s_generation_validity_initialized = false;\n",
+          validityUnits.size());
+  fprintf(f,
+          "\nstatic void generation_initialize_validity(void) {\n"
+          "  memset(s_generation_validity_mismatches, 0, "
+          "sizeof(s_generation_validity_mismatches));\n"
+          "  for (size_t i = 0; i < sizeof(s_generation_validity_addresses) / "
+          "sizeof(s_generation_validity_addresses[0]); ++i) {\n"
+          "    const generation_validity_address_t *address = "
+          "&s_generation_validity_addresses[i];\n"
+          "    for (size_t j = 0; j < address->count; ++j) {\n"
+          "      const generation_validity_constraint_t *constraint = "
+          "&s_generation_validity_constraints[address->first + j];\n"
+          "      if (s_ram[address->address] != constraint->expected)\n"
+          "        ++s_generation_validity_mismatches[constraint->unit];\n"
+          "    }\n"
+          "  }\n"
+          "  s_generation_validity_initialized = true;\n"
+          "}\n");
+  fprintf(f,
+          "\nstatic bool generation_track_write(uint16_t addr, uint8_t old_value, "
+          "uint8_t new_value) {\n"
+          "  if (!s_generation_validity_initialized || addr >= 0xC000 || "
+          "old_value == new_value)\n"
+          "    return false;\n"
+          "  size_t low = 0;\n"
+          "  size_t high = sizeof(s_generation_validity_addresses) / "
+          "sizeof(s_generation_validity_addresses[0]);\n"
+          "  while (low < high) {\n"
+          "    size_t middle = low + (high - low) / 2;\n"
+          "    if (s_generation_validity_addresses[middle].address < addr)\n"
+          "      low = middle + 1;\n"
+          "    else\n"
+          "      high = middle;\n"
+          "  }\n"
+          "  if (low == sizeof(s_generation_validity_addresses) / "
+          "sizeof(s_generation_validity_addresses[0]) ||\n"
+          "      s_generation_validity_addresses[low].address != addr)\n"
+          "    return false;\n"
+          "  const generation_validity_address_t *address = "
+          "&s_generation_validity_addresses[low];\n"
+          "  bool changed = false;\n"
+          "  for (size_t i = 0; i < address->count; ++i) {\n"
+          "    const generation_validity_constraint_t *constraint = "
+          "&s_generation_validity_constraints[address->first + i];\n"
+          "    bool old_matches = old_value == constraint->expected;\n"
+          "    bool new_matches = new_value == constraint->expected;\n"
+          "    if (old_matches == new_matches)\n"
+          "      continue;\n"
+          "    changed = true;\n"
+          "    if (new_matches) {\n"
+          "      if (s_generation_validity_mismatches[constraint->unit] == 0) {\n"
+          "        fprintf(stderr, \"Generation validity counter underflow at $%%04X\\n\", addr);\n"
+          "        abort();\n"
+          "      }\n"
+          "      --s_generation_validity_mismatches[constraint->unit];\n"
+          "    } else {\n"
+          "      ++s_generation_validity_mismatches[constraint->unit];\n"
+          "    }\n"
+          "  }\n"
+          "  return changed;\n"
+          "}\n");
+
+  fprintf(f, "\nstatic int generation_complete_match(void) {\n");
   fprintf(f, "  int matched = -1;\n");
   for (size_t candidate = 0; candidate < representativeStates.size(); ++candidate) {
-    size_t stateIndex = representativeStates[candidate];
-    fprintf(f, "  {\n    bool matches = true;\n");
-    for (const auto &[addr, byte] : signatures[stateIndex]) {
-      fprintf(f, "    if (s_ram[0x%04x] != 0x%02x) matches = false;\n", addr, byte);
-    }
     fprintf(f,
-            "    if (matches) { if (matched >= 0) return -2; matched = %zu; }\n",
+            "  if (s_generation_validity_mismatches["
+            "s_generation_whole_state_units[%zu]] == 0) {\n"
+            "    if (matched >= 0) return -2;\n"
+            "    matched = %zu;\n"
+            "  }\n",
+            wholeStateValidityUnits[candidate],
             candidate);
-    fprintf(f, "  }\n");
   }
   fprintf(f, "  return matched;\n}\n");
 
   fprintf(f,
-          "\nstatic bool generation_instruction_matches(unsigned generation, uint16_t pc) {\n"
-          "  switch (generation) {\n");
-  for (size_t candidate = 0; candidate < representativeStates.size(); ++candidate) {
-    const auto &code = stateCode[representativeStates[candidate]];
-    fprintf(f, "  case %zu:\n    switch (pc) {\n", candidate);
-    for (const auto &[pc, inst] : code) {
-      fprintf(f, "    case 0x%04x: return ", pc);
-      bool firstByte = true;
-      for (unsigned i = 0; i < inst.size; ++i) {
-        if (i && dynamicOperands.count(pc))
-          continue;
-        if (!firstByte)
-          fprintf(f, " && ");
-        fprintf(f, "s_ram[0x%04x] == 0x%02x", (unsigned)pc + i,
-                states[representativeStates[candidate]]->peek((uint16_t)(pc + i)));
-        firstByte = false;
+          "\nstatic int generation_match_at_pc(unsigned preferred_generation, "
+          "uint16_t pc, bool strict) {\n"
+          "  int matched = -1;\n"
+          "  switch (pc) {\n");
+  for (uint16_t pc : generationDispatchPCs) {
+    fprintf(f, "  case 0x%04x:\n", pc);
+    auto pcUnits = pcValidityUnits.find(pc);
+    assert(pcUnits != pcValidityUnits.end());
+    for (const auto &[candidate, units] : pcUnits->second) {
+      fprintf(f, "    if (preferred_generation == %zu && (", candidate);
+      bool firstUnit = true;
+      for (size_t unit : units) {
+        fprintf(f, "%ss_generation_validity_mismatches[%zu] == 0",
+                firstUnit ? "" : " || ",
+                unit);
+        firstUnit = false;
       }
-      fprintf(f, ";\n");
+      fprintf(f, ")) return %zu;\n", candidate);
     }
-    fprintf(f, "    default: return false;\n    }\n");
+    for (const auto &[candidate, units] : pcUnits->second) {
+      fprintf(f, "    if (!strict && (");
+      bool firstUnit = true;
+      for (size_t unit : units) {
+        fprintf(f, "%ss_generation_validity_mismatches[%zu] == 0",
+                firstUnit ? "" : " || ",
+                unit);
+        firstUnit = false;
+      }
+      fprintf(f,
+              ")) { if (matched >= 0) return -2; matched = %zu; }\n",
+              candidate);
+    }
+    fprintf(f, "    break;\n");
   }
-  fprintf(f, "  default: return false;\n  }\n}\n");
-
-  fprintf(f, "\nstatic int generation_match_at_pc(uint16_t pc) {\n  int matched = -1;\n");
-  for (size_t candidate = 0; candidate < representativeStates.size(); ++candidate) {
-    fprintf(f, "  if (generation_instruction_matches(%zu, pc)) {\n", candidate);
-    fprintf(f, "    if (matched >= 0) return -2;\n    matched = %zu;\n  }\n", candidate);
-  }
-  fprintf(f, "  return matched;\n}\n");
+  fprintf(f, "  default: return -1;\n  }\n  return matched;\n}\n");
 
   for (size_t candidate = 0; candidate < representativeStates.size(); ++candidate) {
     Disas &state = *states[representativeStates[candidate]];
@@ -427,6 +727,10 @@ void Disas::printSimpleCRange(FILE *f, const AsmBlock &block, const AsmBlock * /
   std::vector<std::pair<uint16_t, CPUInst>> instructions;
   for (const auto &instruction : block.instructions(this))
     instructions.push_back(instruction);
+  const std::set<uint16_t> transitionBoundaries =
+      simpleCGenerationAware_
+          ? generationTransitionBoundaries(*this, instructions, simpleCDynamicOperands_)
+          : std::set<uint16_t>{};
   auto emitInstructions = [&](size_t first, unsigned remainingCycles) {
     bool fall = false;
     size_t index = first;
@@ -435,7 +739,7 @@ void Disas::printSimpleCRange(FILE *f, const AsmBlock &block, const AsmBlock * /
       unsigned instCycles = simpleCGenerationAware_ && !inst.isInvalid()
                                ? cpuInstCycles(inst.kind, inst.addrMode)
                                : 0;
-      if (simpleCGenerationAware_ && index > first)
+      if (simpleCGenerationAware_ && index > first && transitionBoundaries.count(addr))
         printGenerationCheck(f, addr, remainingCycles);
       fall = printSimpleCInst(
           f,
@@ -461,7 +765,7 @@ void Disas::printSimpleCRange(FILE *f, const AsmBlock &block, const AsmBlock * /
   unsigned suffixCycles = block.baseCycles(this);
   for (size_t i = 0; i < instructions.size(); ++i) {
     const auto [addr, inst] = instructions[i];
-    if (i != 0 && !cfindAsmBlockAt(addr)) {
+    if (i != 0 && simpleCGenerationResumePCs_.count(addr) && !cfindAsmBlockAt(addr)) {
       fprintf(f, "    case 0x%04x: // resume inside block $%04X\n", addr, block.addr());
       printGenerationCheck(f, addr, 0);
       fprintf(f, "      s_cycles += %u;\n", suffixCycles);

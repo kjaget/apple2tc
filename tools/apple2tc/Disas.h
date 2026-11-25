@@ -567,6 +567,7 @@ private:
   bool scDynamicOperand_ = false;
   bool simpleCGenerationAware_ = false;
   std::set<uint16_t> simpleCDynamicOperands_{};
+  std::set<uint16_t> simpleCGenerationResumePCs_{};
 
 private:
   /// Optional path to a JSON file with runtime data.
