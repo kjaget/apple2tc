@@ -13,6 +13,7 @@ trap 'rm -f "$tmp/switch.b33" "$tmp/preloaded.b33" "$tmp/delayed.b33" \
   "$tmp/no-transition.b33" "$tmp/same-block.b33" "$tmp/states.b33" "$tmp/switch.ram" \
   "$tmp/stack-written-code.b33" "$tmp/stack-written-code.ram" \
   "$tmp/stack-written-code.ram.regs" "$tmp/stack-written-code.json" \
+  "$tmp/ambiguous.b33" "$tmp/ambiguous.json" \
   "$tmp/switch.ram.regs" "$tmp/preloaded.ram" "$tmp/preloaded.ram.regs" \
   "$tmp/delayed.ram" "$tmp/delayed.ram.regs" "$tmp/no-transition.ram" \
   "$tmp/no-transition.ram.regs" "$tmp/same-block.ram" "$tmp/same-block.ram.regs" \
@@ -31,7 +32,11 @@ trap 'rm -f "$tmp/switch.b33" "$tmp/preloaded.b33" "$tmp/delayed.b33" \
   "$tmp/unknown-driver.o" "$tmp/unknown-run" "$tmp/delayed-aware.out" \
   "$tmp/preloaded-aware.out" "$tmp/delayed-generation-aware.log" \
   "$tmp/preloaded-generation-aware.log" "$tmp/operand-driver.o" \
-  "$tmp/operand-run" "$tmp/operand-aware.out"; rmdir "$tmp"' EXIT
+  "$tmp/operand-run" "$tmp/operand-aware.out" \
+  "$tmp/ambiguous-driver.o" "$tmp/ambiguous-pc-driver.o" \
+  "$tmp/ambiguous-run" "$tmp/ambiguous-pc-run" \
+  "$tmp/ambiguous-generation-aware.log" "$tmp/ambiguous-pc-generation-aware.log"; \
+  rmdir "$tmp"' EXIT
 
 "$build/tools/a6502/a6502" generation-switch.s "$tmp/switch.b33"
 "$build/tools/a6502/a6502" generation-preloaded.s "$tmp/preloaded.b33"
@@ -40,6 +45,7 @@ trap 'rm -f "$tmp/switch.b33" "$tmp/preloaded.b33" "$tmp/delayed.b33" \
 "$build/tools/a6502/a6502" generation-same-block.s "$tmp/same-block.b33"
 "$build/tools/a6502/a6502" generation-stack-written-code.s "$tmp/stack-written-code.b33"
 "$build/tools/a6502/a6502" generation-state.s "$tmp/states.b33"
+"$build/tools/a6502/a6502" generation-switch-ambiguous.s "$tmp/ambiguous.b33"
 for name in switch preloaded delayed no-transition same-block; do
   if ! "$build/tools/a2run/a2run" "$tmp/$name.b33" --collect --limit=20 --frames=150 \
       --snapshot-at=0380 --snapshot-out="$tmp/$name.ram" --out="$tmp/$name.json" \
@@ -288,6 +294,28 @@ states = {
 states_path = tmp / "states.json"
 states_path.write_text(json.dumps(states))
 
+ambiguous_regs = dict(pc=0x300, a=0, x=0, y=0, status=0x20, sp=0xff)
+ambiguous_recording = {
+    "BranchTargets": [],
+    "Branches": {},
+    "FirstInstructions": [
+        [0x300, 0xa9, 0x00, 0x00, True],
+        [0x302, 0x60, 0x00, 0x00, False],
+        [0x400, 0x60, 0x00, 0x00, False],
+        [0x500, 0x60, 0x00, 0x00, False],
+    ],
+    "generations": [
+        {"regs": ambiguous_regs, "code": []},
+        {"regs": ambiguous_regs, "code": [
+            {"addr": 0x300, "bytes": [0x4c, 0x00, 0x04]},
+        ]},
+        {"regs": ambiguous_regs, "code": [
+            {"addr": 0x300, "bytes": [0x4c, 0x00, 0x05]},
+        ]},
+    ],
+}
+(tmp / "ambiguous.json").write_text(json.dumps(ambiguous_recording))
+
 def disassemble_state(index, data_path=states_path):
     output = tmp / f"state{index}.asm"
     with output.open("w") as stream:
@@ -467,3 +495,27 @@ if "$tmp/unknown-run" >"$tmp/unknown-generation-aware.log" 2>&1; then
   exit 1
 fi
 grep -q 'Unknown generation instruction at \$0900' "$tmp/unknown-generation-aware.log"
+
+"$build/tools/apple2tc/apple2tc" "$tmp/ambiguous.b33" --generation-aware \
+  --run-data="$tmp/ambiguous.json" >"$tmp/generation-switch-generated.c" \
+  2>"$tmp/generation-aware-generate.log"
+cc -std=c11 -I../include -I"$tmp" -c generation-switch-ambiguous-driver.c \
+  -o "$tmp/ambiguous-driver.o"
+c++ "$tmp/ambiguous-driver.o" "$build/lib/a2host/liba2host.a" \
+  "$build/lib/a2io/liba2io.a" -pthread -lm -o "$tmp/ambiguous-run"
+if "$tmp/ambiguous-run" >"$tmp/ambiguous-generation-aware.log" 2>&1; then
+  echo "Expected overlapping generation signatures to fail closed" >&2
+  exit 1
+fi
+grep -q 'Ambiguous generation state at \$0300' "$tmp/ambiguous-generation-aware.log"
+
+cc -std=c11 -DAMBIGUOUS_PC=1 -I../include -I"$tmp" \
+  -c generation-switch-ambiguous-driver.c -o "$tmp/ambiguous-pc-driver.o"
+c++ "$tmp/ambiguous-pc-driver.o" "$build/lib/a2host/liba2host.a" \
+  "$build/lib/a2io/liba2io.a" -pthread -lm -o "$tmp/ambiguous-pc-run"
+if "$tmp/ambiguous-pc-run" >"$tmp/ambiguous-pc-generation-aware.log" 2>&1; then
+  echo "Expected ambiguous current-PC instructions to fail closed" >&2
+  exit 1
+fi
+grep -q 'Ambiguous generation instruction at \$0300' \
+  "$tmp/ambiguous-pc-generation-aware.log"

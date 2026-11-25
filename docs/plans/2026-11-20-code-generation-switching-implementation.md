@@ -293,17 +293,19 @@ state completeness remain for later tasks.
 - [x] Add delayed, unchanged, restored, and same-block evidence fixtures. The
       same-block test proves `$0305` changes after a store at `$0302` while
       remaining in the `$0300-$030C` block.
-- [ ] Implement and test the runtime signature matcher and invalidation
+- [x] Implement and test the runtime signature matcher and invalidation
       behavior for known/unchanged/restored, partial/unknown, and ambiguous
       states. This requires the runtime selector introduced in Task 6; it is
       a hard gate before code-generation dispatch, not evidence that dispatch
       already exists.
 
 **Evidence gate:** the fixtures establish a candidate contract and show why
-block-entry-only dispatch is too late. The initial Task 6 implementation now
-has known/restored, delayed, same-block, and unknown-opcode replay checks.
-Runtime ambiguity and broader independent-region tests remain gates for
-expanding the supported subset.
+block-entry-only dispatch is too late. The initial Task 6 implementation has
+known/restored, delayed, same-block, and unknown-opcode replay checks. Focused
+runtime tests also prove that compatible signatures from independent code
+regions and multiple matching instructions at the current PC fail closed with
+explicit ambiguity diagnostics. Broader independent-region combinations remain
+a gate for expanding the supported subset.
 
 ### 6. Emit complete switches and safe dispatch
 
@@ -319,10 +321,10 @@ runtime helpers only if needed, generated-C tests.
       until later writes complete.
 - [x] Reject identical signatures that have different decoded instruction or
       block layouts. Unknown current instructions fail before stale code runs.
-- [ ] Add explicit runtime tests where two different state signatures both
+- [x] Add explicit runtime tests where two different state signatures both
       match because they constrain independent regions, and where a generated
-      state is ambiguous at the current PC. These remain unsupported/error
-      cases until tested.
+      state is ambiguous at the current PC. Both fail closed with explicit
+      state-level or instruction-level diagnostics.
 - [x] Add an opt-in `--generation-aware` path. It emits one helper with a
       complete static PC switch per distinct materialized code state, persists
       the active state and `branchTarget` across helper calls, and reports
