@@ -9,6 +9,7 @@
 
 #include "IR.h"
 
+#include <algorithm>
 #include <functional>
 #include <tuple>
 #include <unordered_map>

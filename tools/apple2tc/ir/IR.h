@@ -12,6 +12,7 @@
 #include "apple2tc/ArrayRef.h"
 #include "apple2tc/IteratorRange.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <unordered_map>

@@ -9,6 +9,7 @@
 #include "apple2tc/d6502.h"
 #include "apple2tc/support.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cctype>
 #include <cstdarg>
